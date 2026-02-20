@@ -239,6 +239,7 @@ export const UploadView: React.FC = () => {
           <MetricSelector
             selectedMetrics={state.selectedMetrics}
             onToggleMetric={actions.toggleMetric}
+            loadFromAPI={true}
           />
         </div>
 

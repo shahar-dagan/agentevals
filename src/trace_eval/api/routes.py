@@ -27,69 +27,143 @@ async def health_check():
 
 @router.get("/metrics")
 async def list_metrics():
-    """List available metrics with metadata."""
+    """List available metrics with metadata.
+
+    Dynamically loads metrics from ADK registry and adds trace-eval metadata.
+    """
     from ..runner import _METRICS_NEEDING_EXPECTED, _METRICS_NEEDING_LLM
 
-    metrics = [
-        {
-            "name": "tool_trajectory_avg_score",
-            "category": "trajectory",
-            "requiresEvalSet": True,
-            "requiresLLM": False,
-            "description": "Compare tool call sequences against expected trajectory",
-        },
-        {
-            "name": "response_match_score",
-            "category": "response",
-            "requiresEvalSet": True,
-            "requiresLLM": False,
-            "description": "Text similarity between actual and expected responses",
-        },
-        {
-            "name": "response_evaluation_score",
-            "category": "response",
-            "requiresEvalSet": True,
-            "requiresLLM": False,
-            "description": "Semantic evaluation of response quality",
-        },
-        {
-            "name": "final_response_match_v2",
-            "category": "response",
-            "requiresEvalSet": True,
-            "requiresLLM": True,
-            "description": "LLM-based comparison of final responses",
-        },
-        {
-            "name": "rubric_based_final_response_quality_v1",
-            "category": "quality",
-            "requiresEvalSet": False,
-            "requiresLLM": True,
-            "description": "Rubric-based quality assessment of responses",
-        },
-        {
-            "name": "hallucinations_v1",
-            "category": "safety",
-            "requiresEvalSet": False,
-            "requiresLLM": True,
-            "description": "Detect hallucinated information in responses",
-        },
-        {
-            "name": "safety_v1",
-            "category": "safety",
-            "requiresEvalSet": False,
-            "requiresLLM": True,
-            "description": "Safety and security assessment",
-        },
-        {
-            "name": "rubric_based_tool_use_quality_v1",
-            "category": "tool_use",
-            "requiresEvalSet": False,
-            "requiresLLM": True,
-            "description": "Rubric-based assessment of tool usage quality",
-        },
-    ]
+    _METRICS_NEEDING_GCP = {
+        "response_evaluation_score",
+        "safety_v1",
+    }
 
-    return metrics
+    _METRICS_NEEDING_RUBRICS = {
+        "rubric_based_final_response_quality_v1",
+        "rubric_based_tool_use_quality_v1",
+    }
+
+    _METRIC_CATEGORIES = {
+        "tool_trajectory_avg_score": "trajectory",
+        "response_match_score": "response",
+        "response_evaluation_score": "response",
+        "final_response_match_v2": "response",
+        "rubric_based_final_response_quality_v1": "quality",
+        "rubric_based_tool_use_quality_v1": "quality",
+        "hallucinations_v1": "safety",
+        "safety_v1": "safety",
+    }
+
+    try:
+        # Try to load from ADK registry (like CLI does)
+        from google.adk.evaluation.metric_evaluator_registry import (
+            DEFAULT_METRIC_EVALUATOR_REGISTRY,
+        )
+
+        registry_metrics = DEFAULT_METRIC_EVALUATOR_REGISTRY.get_registered_metrics()
+
+        # Filter out per_turn_user_simulator_quality_v1 (not applicable to trace eval)
+        metrics = []
+        for m in registry_metrics:
+            if m.metric_name == "per_turn_user_simulator_quality_v1":
+                continue
+
+            metrics.append({
+                "name": m.metric_name,
+                "category": _METRIC_CATEGORIES.get(m.metric_name, "other"),
+                "requiresEvalSet": m.metric_name in _METRICS_NEEDING_EXPECTED,
+                "requiresLLM": m.metric_name in _METRICS_NEEDING_LLM,
+                "requiresGCP": m.metric_name in _METRICS_NEEDING_GCP,
+                "requiresRubrics": m.metric_name in _METRICS_NEEDING_RUBRICS,
+                "description": m.description or "No description available",
+                "working": m.metric_name not in _METRICS_NEEDING_RUBRICS,
+            })
+
+        return metrics
+
+    except ImportError:
+        return [
+            {
+                "name": "tool_trajectory_avg_score",
+                "category": "trajectory",
+                "requiresEvalSet": True,
+                "requiresLLM": False,
+                "requiresGCP": False,
+                "requiresRubrics": False,
+                "working": True,
+                "description": "Compare tool call sequences against expected trajectory",
+            },
+            {
+                "name": "response_match_score",
+                "category": "response",
+                "requiresEvalSet": True,
+                "requiresLLM": False,
+                "requiresGCP": False,
+                "requiresRubrics": False,
+                "working": True,
+                "description": "Text similarity between actual and expected responses using ROUGE-1",
+            },
+            {
+                "name": "response_evaluation_score",
+                "category": "response",
+                "requiresEvalSet": True,
+                "requiresLLM": False,
+                "requiresGCP": True,
+                "requiresRubrics": False,
+                "working": True,
+                "description": "Semantic evaluation of response quality using Vertex AI",
+            },
+            {
+                "name": "final_response_match_v2",
+                "category": "response",
+                "requiresEvalSet": True,
+                "requiresLLM": True,
+                "requiresGCP": False,
+                "requiresRubrics": False,
+                "working": True,
+                "description": "LLM-based comparison of final responses",
+            },
+            {
+                "name": "hallucinations_v1",
+                "category": "safety",
+                "requiresEvalSet": False,
+                "requiresLLM": True,
+                "requiresGCP": False,
+                "requiresRubrics": False,
+                "working": True,
+                "description": "Detect hallucinated information in responses",
+            },
+            {
+                "name": "safety_v1",
+                "category": "safety",
+                "requiresEvalSet": False,
+                "requiresLLM": False,
+                "requiresGCP": True,
+                "requiresRubrics": False,
+                "working": True,
+                "description": "Safety and security assessment using Vertex AI",
+            },
+            {
+                "name": "rubric_based_final_response_quality_v1",
+                "category": "quality",
+                "requiresEvalSet": False,
+                "requiresLLM": True,
+                "requiresGCP": False,
+                "requiresRubrics": True,
+                "working": False,
+                "description": "Rubric-based quality assessment of responses (requires rubrics config)",
+            },
+            {
+                "name": "rubric_based_tool_use_quality_v1",
+                "category": "quality",
+                "requiresEvalSet": False,
+                "requiresLLM": True,
+                "requiresGCP": False,
+                "requiresRubrics": True,
+                "working": False,
+                "description": "Rubric-based assessment of tool usage quality (requires rubrics config)",
+            },
+        ]
 
 
 @router.post("/validate/eval-set")
@@ -161,7 +235,7 @@ async def evaluate_traces(
             with open(trace_path, "wb") as f:
                 content = await trace_file.read()
 
-                if len(content) > 10 * 1024 * 1024:  # 10MB limit
+                if len(content) > 10 * 1024 * 1024:
                     raise HTTPException(
                         status_code=400,
                         detail=f"File {trace_file.filename} exceeds 10MB limit",
@@ -218,7 +292,7 @@ async def evaluate_traces(
         )
 
         logger.info(f"Evaluating {len(trace_paths)} trace file(s) with metrics: {metrics}")
-        result = run_evaluation(eval_config)
+        result = await run_evaluation(eval_config)
 
         return result
 

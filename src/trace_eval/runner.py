@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import json
 import logging
 from dataclasses import dataclass, field
@@ -85,7 +87,7 @@ def load_eval_set(path: str) -> EvalSet:
     return EvalSet.model_validate(data)
 
 
-def run_evaluation(config: EvalRunConfig) -> RunResult:
+async def run_evaluation(config: EvalRunConfig) -> RunResult:
     result = RunResult()
 
     loader = get_loader(config.trace_format)
@@ -115,7 +117,7 @@ def run_evaluation(config: EvalRunConfig) -> RunResult:
             result.errors.append(msg)
 
     for conv_result in conversion_results:
-        trace_result = _evaluate_trace(
+        trace_result = await _evaluate_trace(
             conv_result=conv_result,
             metrics=config.metrics,
             eval_set=eval_set,
@@ -127,7 +129,7 @@ def run_evaluation(config: EvalRunConfig) -> RunResult:
     return result
 
 
-def _evaluate_trace(
+async def _evaluate_trace(
     conv_result: ConversionResult,
     metrics: list[str],
     eval_set: EvalSet | None,
@@ -156,7 +158,7 @@ def _evaluate_trace(
         expected_invocations = _find_expected_invocations(actual_invocations, eval_set)
 
     for metric_name in metrics:
-        metric_result = _evaluate_metric(
+        metric_result = await _evaluate_metric(
             metric_name=metric_name,
             actual_invocations=actual_invocations,
             expected_invocations=expected_invocations,
@@ -168,7 +170,7 @@ def _evaluate_trace(
     return trace_result
 
 
-def _evaluate_metric(
+async def _evaluate_metric(
     metric_name: str,
     actual_invocations: list[Invocation],
     expected_invocations: list[Invocation] | None,
@@ -188,10 +190,16 @@ def _evaluate_metric(
         eval_metric = _build_eval_metric(metric_name, judge_model, threshold)
         evaluator: Evaluator = _get_evaluator(eval_metric)
 
-        eval_result: EvaluationResult = evaluator.evaluate_invocations(
-            actual_invocations=actual_invocations,
-            expected_invocations=expected_invocations,
-        )
+        if inspect.iscoroutinefunction(evaluator.evaluate_invocations):
+            eval_result: EvaluationResult = await evaluator.evaluate_invocations(
+                actual_invocations=actual_invocations,
+                expected_invocations=expected_invocations,
+            )
+        else:
+            eval_result: EvaluationResult = evaluator.evaluate_invocations(
+                actual_invocations=actual_invocations,
+                expected_invocations=expected_invocations,
+            )
 
         per_inv_scores = [r.score for r in eval_result.per_invocation_results]
 
@@ -256,7 +264,7 @@ def _build_eval_metric(
 
     return EvalMetric(
         metric_name=metric_name,
-        threshold=threshold,
+        threshold=effective_threshold,
         criterion=criterion,
     )
 

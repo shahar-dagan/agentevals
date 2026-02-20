@@ -1,9 +1,23 @@
 """FastAPI application for trace-eval REST API."""
 
+import os
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .routes import router
+
+# Load environment variables from .env file if it exists
+# This makes GOOGLE_API_KEY available for LLM-based evaluators
+try:
+    from dotenv import load_dotenv
+
+    env_path = Path(__file__).parent.parent.parent.parent / ".env"
+    if env_path.exists():
+        load_dotenv(env_path)
+except ImportError:
+    pass
 
 app = FastAPI(
     title="trace-eval API",

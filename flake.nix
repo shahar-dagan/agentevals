@@ -81,7 +81,15 @@
 
             # NodeJS
             pkgs.nodejs_22
+
+            # C++ standard library for numpy
+            pkgs.stdenv.cc.cc.lib
           ];
+
+          # Make libstdc++.so.6 available to uv's .venv
+          shellHook = ''
+            export LD_LIBRARY_PATH="${pkgs.stdenv.cc.cc.lib}/lib:$LD_LIBRARY_PATH"
+          '';
         };
       }
     );

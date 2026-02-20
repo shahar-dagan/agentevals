@@ -1,11 +1,13 @@
-import React from 'react';
-import { Checkbox, Button } from 'antd';
+import React, { useState, useEffect } from 'react';
+import { Checkbox, Button, Spin } from 'antd';
 import { css } from '@emotion/react';
-import { AVAILABLE_METRICS } from '../../lib/types';
+import { AVAILABLE_METRICS, type MetricMetadata } from '../../lib/types';
+import { listMetrics } from '../../api/client';
 
 interface MetricSelectorProps {
   selectedMetrics: string[];
   onToggleMetric: (metric: string) => void;
+  loadFromAPI?: boolean;
 }
 
 const selectorStyle = css`
@@ -87,6 +89,24 @@ const selectorStyle = css`
     border: 1px solid rgba(167, 139, 250, 0.3);
   }
 
+  .badge-gcp {
+    background-color: rgba(59, 130, 246, 0.1);
+    color: #60A5FA;
+    border: 1px solid rgba(59, 130, 246, 0.3);
+  }
+
+  .badge-rubrics {
+    background-color: rgba(251, 146, 60, 0.1);
+    color: #FB923C;
+    border: 1px solid rgba(251, 146, 60, 0.3);
+  }
+
+  .badge-incomplete {
+    background-color: rgba(239, 68, 68, 0.1);
+    color: #EF4444;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+  }
+
   .selector-actions {
     display: flex;
     gap: 8px;
@@ -108,9 +128,29 @@ const selectorStyle = css`
 export const MetricSelector: React.FC<MetricSelectorProps> = ({
   selectedMetrics,
   onToggleMetric,
+  loadFromAPI = false,
 }) => {
-  // Group metrics by category
-  const categorizedMetrics = AVAILABLE_METRICS.reduce(
+  const [metrics, setMetrics] = useState<MetricMetadata[]>(AVAILABLE_METRICS);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (loadFromAPI) {
+      setLoading(true);
+      listMetrics()
+        .then((apiMetrics) => {
+          setMetrics(apiMetrics);
+        })
+        .catch((error) => {
+          console.error('Failed to load metrics from API, using fallback:', error);
+          setMetrics(AVAILABLE_METRICS);
+        })
+        .finally(() => {
+          setLoading(false);
+        });
+    }
+  }, [loadFromAPI]);
+
+  const categorizedMetrics = metrics.reduce(
     (acc, metric) => {
       if (!acc[metric.category]) {
         acc[metric.category] = [];
@@ -118,11 +158,11 @@ export const MetricSelector: React.FC<MetricSelectorProps> = ({
       acc[metric.category].push(metric);
       return acc;
     },
-    {} as Record<string, typeof AVAILABLE_METRICS>
+    {} as Record<string, MetricMetadata[]>
   );
 
   const handleSelectAll = () => {
-    AVAILABLE_METRICS.forEach((metric) => {
+    metrics.forEach((metric) => {
       if (!selectedMetrics.includes(metric.name)) {
         onToggleMetric(metric.name);
       }
@@ -134,6 +174,14 @@ export const MetricSelector: React.FC<MetricSelectorProps> = ({
       onToggleMetric(metric);
     });
   };
+
+  if (loading) {
+    return (
+      <div css={selectorStyle} style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '200px' }}>
+        <Spin tip="Loading metrics..." />
+      </div>
+    );
+  }
 
   return (
     <div css={selectorStyle}>
@@ -157,6 +205,15 @@ export const MetricSelector: React.FC<MetricSelectorProps> = ({
                     )}
                     {metric.requiresLLM && (
                       <span className="metric-badge badge-llm">Uses LLM</span>
+                    )}
+                    {metric.requiresGCP && (
+                      <span className="metric-badge badge-gcp">Requires GCP</span>
+                    )}
+                    {metric.requiresRubrics && (
+                      <span className="metric-badge badge-rubrics">Requires Rubrics</span>
+                    )}
+                    {metric.working === false && (
+                      <span className="metric-badge badge-incomplete">Incomplete</span>
                     )}
                   </div>
                 </div>
