@@ -10,6 +10,7 @@ Usage::
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import sys
 
@@ -103,7 +104,7 @@ def run(
         output_format=output,
     )
 
-    result = run_evaluation(config)
+    result = asyncio.run(run_evaluation(config))
     formatted = format_results(result, fmt=output)
     click.echo(formatted)
 
