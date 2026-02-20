@@ -1,87 +1,78 @@
-`trace-eval` is a standalone CLI tool that scores agent behavior from OpenTelemetry traces (Jaeger JSON format initially) without re-running the agent. It parses trace spans (`invoke_agent`, `call_llm`, `execute_tool`) and converts them into ADK's Invocation data structures while extracting user input, final response, tool calls, and tool responses.
+`trace-eval` scores agent behavior from OpenTelemetry traces without re-running the agent. It parses trace spans from Jaeger JSON format and evaluates them against golden eval sets using ADK's evaluation framework.
 
-Unlike adk-python's LocalEvalService, which couples agent execution with evaluation (it runs the agent and then scores), trace-eval only does the scoring half: it takes pre-recorded traces and feeds them directly to ADK's evaluator classes like TrajectoryEvaluator.
+Unlike ADK's LocalEvalService, which couples agent execution with evaluation, trace-eval only handles scoring: it takes pre-recorded traces and compares them against expected behavior using metrics like tool trajectory matching, response quality, and LLM-based judgments.
 
-You provide a golden eval set (JSON following ADK's EvalSet schema) with expected tool calls/responses, and trace-eval compares actual vs expected using the same metrics ADK uses. It supports both lightweight metrics (e.g. trajectory matching) and we can add LLM-judge metrics (hallucinations, rubric-based quality)
+The tool provides both a CLI for local dev work, scripting and CI pipelines, and a web UI for visual inspection, EvalSet creation and interactive evaluation. 
 
-Commands to try:
+## Getting Started
 
-Score helm trace for correct tool usage
+Install dependencies using the Nix development environment (recommended) or uv:
 
-```console
+```bash
+# Using Nix (includes all dependencies)
+nix develop .
+
+# Or using uv directly
+uv sync
+```
+
+Run a quick evaluation:
+
+```bash
 uv run trace-eval run samples/helm.json --eval-set samples/eval_set_helm.json -m tool_trajectory_avg_score
 ```
 
-```console
-Trace: 3e289017fe03ffd7c4145316d2eb3d0d
-Invocations: 1
-        Metric                       Score  Status      Per-Invocation  Error
-------  -------------------------  -------  --------  ----------------  -------
-[PASS]  tool_trajectory_avg_score        1  PASSED                   1
+## CLI Usage
+
+Score a single trace:
+
+```bash
+uv run trace-eval run samples/helm.json --eval-set samples/eval_set_helm.json -m tool_trajectory_avg_score
 ```
 
-Score multiple traces at once (helm passes, k8s fails since no matching golden data)
+Score multiple traces at once:
 
-```console
+```bash
 uv run trace-eval run samples/helm.json samples/k8s.json --eval-set samples/eval_set_helm.json -m tool_trajectory_avg_score
 ```
 
-```console
-Trace: 3e289017fe03ffd7c4145316d2eb3d0d
-Invocations: 1
-        Metric                       Score  Status      Per-Invocation  Error
-------  -------------------------  -------  --------  ----------------  -------
-[PASS]  tool_trajectory_avg_score        1  PASSED                   1
+Output as JSON for programmatic consumption:
 
-Trace: d497c9dd55717f2c5ecb79bda3028993
-Invocations: 1
-        Metric                       Score  Status      Per-Invocation  Error
-------  -------------------------  -------  --------  ----------------  -------
-[FAIL]  tool_trajectory_avg_score        0  FAILED                   0
+```bash
+uv run trace-eval run samples/helm.json --eval-set samples/eval_set_helm.json --output json
 ```
 
-JSON output for programmatic consumption
+List available metrics:
 
-```console
-uv run trace-eval run samples/helm.json --eval-set samples/eval_set_helm.json -m tool_trajectory_avg_score --output json
-```
-
-```json
-{
-  "traces": [
-    {
-      "trace_id": "3e289017fe03ffd7c4145316d2eb3d0d",
-      "num_invocations": 1,
-      "conversion_warnings": [],
-      "metrics": [
-        {
-          "metric_name": "tool_trajectory_avg_score",
-          "score": 1.0,
-          "eval_status": "PASSED",
-          "per_invocation_scores": [
-            1.0
-          ],
-          "error": null
-        }
-      ]
-    }
-  ],
-  "errors": []
-}
+```bash
+uv run trace-eval list-metrics
 ```
 
 ## Web UI
 
-The React UI provides visual trace inspection and evaluation. It calls the Python backend via REST API for all evaluation logic.
+The React-based UI provides visual trace inspection and interactive evaluation:
 
-**Start locally:**
-
-```console
+```bash
 # Terminal 1: Start API server
 uv run uvicorn trace_eval.api.app:app --reload --port 8000
 
-# Terminal 2: Start UI
+# Terminal 2: Start UI dev server
 cd ui && npm run dev
 ```
 
-Open http://localhost:5173, upload trace files and an eval set, select metrics, and run evaluation. The UI shows results in a dashboard with interactive trace inspection (span tree, invocations, actual vs expected comparisons).
+Open http://localhost:5173 to upload traces and eval sets, select metrics, and view results with interactive span trees and actual vs expected comparisons.
+
+## Local Development
+
+The project uses Nix for reproducible development environments. All dependencies (Python, Node.js, packages) are managed via `flake.nix`:
+
+```bash
+# Enter development shell
+nix develop .
+
+# Run tests
+uv run pytest
+
+# Run specific test
+uv run pytest tests/test_runner.py -v
+```
