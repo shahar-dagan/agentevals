@@ -18,7 +18,7 @@ export const WelcomeView: React.FC = () => {
     <div css={containerStyle}>
       <div css={contentStyle}>
         <div css={headerStyle}>
-          <h1>trace-eval</h1>
+          <h1>agentevals</h1>
           <p>Evaluate agent behavior from pre-recorded OpenTelemetry traces</p>
         </div>
 

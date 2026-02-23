@@ -1,4 +1,4 @@
-"""Configuration for trace-eval runs."""
+"""Configuration for agentevals runs."""
 
 from __future__ import annotations
 

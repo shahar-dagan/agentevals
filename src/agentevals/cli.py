@@ -1,11 +1,11 @@
-"""CLI entry point for trace-eval.
+"""CLI entry point for agentevals.
 
 Usage::
 
-    trace-eval run samples/helm.json --eval-set samples/eval_set_helm.json
-    trace-eval run samples/helm.json -m tool_trajectory_avg_score -m response_match_score
-    trace-eval run samples/helm.json --eval-set samples/eval_set_helm.json --output json
-    trace-eval list-metrics
+    agentevals run samples/helm.json --eval-set samples/eval_set_helm.json
+    agentevals run samples/helm.json -m tool_trajectory_avg_score -m response_match_score
+    agentevals run samples/helm.json --eval-set samples/eval_set_helm.json --output json
+    agentevals list-metrics
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ from .runner import run_evaluation
     help="Increase verbosity (-v for INFO, -vv for DEBUG).",
 )
 def main(verbose: int) -> None:
-    """trace-eval: Evaluate agent traces using ADK's scoring framework."""
+    """agentevals: Evaluate agent traces using ADK's scoring framework."""
     level = logging.WARNING
     if verbose == 1:
         level = logging.INFO

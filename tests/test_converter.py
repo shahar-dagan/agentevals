@@ -3,8 +3,8 @@ import os
 
 import pytest
 
-from trace_eval.loader.jaeger import JaegerJsonLoader
-from trace_eval.converter import (
+from agentevals.loader.jaeger import JaegerJsonLoader
+from agentevals.converter import (
     ConversionResult,
     convert_trace,
     convert_traces,
@@ -12,7 +12,7 @@ from trace_eval.converter import (
     _extract_final_response,
     _find_adk_spans,
 )
-from trace_eval.loader.base import Span, Trace
+from agentevals.loader.base import Span, Trace
 
 
 SAMPLES_DIR = os.path.join(os.path.dirname(__file__), "..", "samples")

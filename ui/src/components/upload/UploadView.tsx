@@ -209,7 +209,7 @@ export const UploadView: React.FC = () => {
             Open EvalSet Builder
           </button>
         </div>
-        <h1 className="title">trace-eval</h1>
+        <h1 className="title">agentevals</h1>
         <p className="subtitle">
           Evaluate agent behavior from OpenTelemetry traces without re-running agents
         </p>

@@ -1,4 +1,4 @@
-"""FastAPI application for trace-eval REST API."""
+"""FastAPI application for agentevals REST API."""
 
 import os
 from pathlib import Path
@@ -20,7 +20,7 @@ except ImportError:
     pass
 
 app = FastAPI(
-    title="trace-eval API",
+    title="agentevals API",
     version="0.1.0",
     description="REST API for evaluating agent traces using ADK's scoring framework",
 )

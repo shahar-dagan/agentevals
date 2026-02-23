@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "trace-eval"
+name = "agentevals"
 version = "0.1.0"
 description = "Standalone CLI to evaluate agent traces using ADK's scoring framework"
 requires-python = ">=3.11"
@@ -19,10 +19,10 @@ dependencies = [
 ]
 
 [project.scripts]
-trace-eval = "trace_eval.cli:main"
+agentevals = "agentevals.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/trace_eval"]
+packages = ["src/agentevals"]
 
 [tool.uv.extra-build-dependencies]
 "rouge_score-0.1.2" = ["setuptools"]

@@ -1,4 +1,4 @@
-"""API routes for trace-eval."""
+"""API routes for agentevals."""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ async def health_check():
 async def list_metrics():
     """List available metrics with metadata.
 
-    Dynamically loads metrics from ADK registry and adds trace-eval metadata.
+    Dynamically loads metrics from ADK registry and adds agentevals metadata.
     """
     from ..runner import _METRICS_NEEDING_EXPECTED, _METRICS_NEEDING_LLM
 

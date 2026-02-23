@@ -1,6 +1,6 @@
-`trace-eval` scores agent behavior from OpenTelemetry traces without re-running the agent. It parses trace spans from Jaeger JSON format and evaluates them against golden eval sets using ADK's evaluation framework.
+`agentevals` scores agent behavior from OpenTelemetry traces without re-running the agent. It parses trace spans from Jaeger JSON format and evaluates them against golden eval sets using ADK's evaluation framework.
 
-Unlike ADK's LocalEvalService, which couples agent execution with evaluation, trace-eval only handles scoring: it takes pre-recorded traces and compares them against expected behavior using metrics like tool trajectory matching, response quality, and LLM-based judgments.
+Unlike ADK's LocalEvalService, which couples agent execution with evaluation, agentevals only handles scoring: it takes pre-recorded traces and compares them against expected behavior using metrics like tool trajectory matching, response quality, and LLM-based judgments.
 
 The tool provides both a CLI for local dev work, scripting and CI pipelines, and a web UI for visual inspection, EvalSet creation and interactive evaluation. 
 
@@ -19,7 +19,7 @@ uv sync
 Run a quick evaluation:
 
 ```bash
-uv run trace-eval run samples/helm.json --eval-set samples/eval_set_helm.json -m tool_trajectory_avg_score
+uv run agentevals run samples/helm.json --eval-set samples/eval_set_helm.json -m tool_trajectory_avg_score
 ```
 
 ## CLI Usage
@@ -27,25 +27,25 @@ uv run trace-eval run samples/helm.json --eval-set samples/eval_set_helm.json -m
 Score a single trace:
 
 ```bash
-uv run trace-eval run samples/helm.json --eval-set samples/eval_set_helm.json -m tool_trajectory_avg_score
+uv run agentevals run samples/helm.json --eval-set samples/eval_set_helm.json -m tool_trajectory_avg_score
 ```
 
 Score multiple traces at once:
 
 ```bash
-uv run trace-eval run samples/helm.json samples/k8s.json --eval-set samples/eval_set_helm.json -m tool_trajectory_avg_score
+uv run agentevals run samples/helm.json samples/k8s.json --eval-set samples/eval_set_helm.json -m tool_trajectory_avg_score
 ```
 
 Output as JSON for programmatic consumption:
 
 ```bash
-uv run trace-eval run samples/helm.json --eval-set samples/eval_set_helm.json --output json
+uv run agentevals run samples/helm.json --eval-set samples/eval_set_helm.json --output json
 ```
 
 List available metrics:
 
 ```bash
-uv run trace-eval list-metrics
+uv run agentevals list-metrics
 ```
 
 ## Web UI
@@ -54,7 +54,7 @@ The React-based UI provides visual trace inspection and interactive evaluation:
 
 ```bash
 # Terminal 1: Start API server
-uv run uvicorn trace_eval.api.app:app --reload --port 8000
+uv run uvicorn agentevals.api.app:app --reload --port 8000
 
 # Terminal 2: Start UI dev server
 cd ui && npm run dev

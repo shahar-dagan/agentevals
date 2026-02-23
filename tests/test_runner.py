@@ -2,8 +2,8 @@ import os
 
 import pytest
 
-from trace_eval.config import EvalRunConfig
-from trace_eval.runner import run_evaluation, load_eval_set
+from agentevals.config import EvalRunConfig
+from agentevals.runner import run_evaluation, load_eval_set
 
 
 SAMPLES_DIR = os.path.join(os.path.dirname(__file__), "..", "samples")
@@ -81,7 +81,7 @@ class TestRunner:
         assert len(tr.metric_results) == 2
 
     def test_json_output_format(self):
-        from trace_eval.output import format_results
+        from agentevals.output import format_results
 
         config = EvalRunConfig(
             trace_files=[HELM_TRACE],
