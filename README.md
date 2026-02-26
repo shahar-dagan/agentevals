@@ -1,4 +1,4 @@
-`agentevals` scores agent behavior from OpenTelemetry traces without re-running the agent. It parses trace spans from Jaeger JSON format and evaluates them against golden eval sets using ADK's evaluation framework.
+`agentevals` scores agent behavior from OpenTelemetry traces without re-running the agent. It parses trace spans from `otlp` streams, or Jaeger JSON format and evaluates them against golden eval sets using ADK's evaluation framework.
 
 Unlike ADK's LocalEvalService, which couples agent execution with evaluation, agentevals only handles scoring: it takes pre-recorded traces and compares them against expected behavior using metrics like tool trajectory matching, response quality, and LLM-based judgments.
 
@@ -61,6 +61,18 @@ cd ui && npm run dev
 ```
 
 Open http://localhost:5173 to upload traces and eval sets, select metrics, and view results with interactive span trees and actual vs expected comparisons.
+
+For rapid iteration during development, use the local dev mode to stream agent runs in real-time:
+
+```bash
+# Terminal 1: Start server in dev mode
+uv run agentevals serve --dev
+
+# Terminal 2: Start UI dev server
+cd ui && npm run dev
+```
+
+Push traces to the websocket endpoint and they'll appear live in the "Local Dev" tab. Select eval sets and metrics to evaluate the received traces, with results grouped by session ID for easy comparison across runs.
 
 ## Local Development
 
