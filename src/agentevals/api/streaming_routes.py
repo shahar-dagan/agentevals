@@ -14,6 +14,7 @@ from ..converter import convert_traces
 from ..loader.otlp import OtlpJsonLoader
 from ..runner import run_evaluation
 from ..config import EvalRunConfig
+from ..utils.log_enrichment import enrich_spans_with_logs
 
 logger = logging.getLogger(__name__)
 
@@ -287,81 +288,6 @@ async def download_file(filename: str):
     return FileResponse(file_path, media_type="application/json", filename=filename)
 
 
-def _enrich_spans_with_logs(spans: list[dict], logs: list[dict]) -> list[dict]:
-    """Enrich spans with message content from GenAI logs.
-
-    This reconstructs gen_ai.input.messages and gen_ai.output.messages attributes
-    from log events so the converter can extract message content.
-    """
-    if not logs:
-        return spans
-
-    input_messages = []
-    output_messages = []
-    seen_user_messages = set()
-    seen_assistant_messages = set()
-
-    for log in logs:
-        event_name = log.get("event_name", "")
-        body = log.get("body", {})
-
-        if not isinstance(body, dict):
-            continue
-
-        if event_name == "gen_ai.user.message":
-            user_content = body.get("content", "")
-            if user_content and user_content not in seen_user_messages:
-                user_msg = {
-                    "role": "user",
-                    "content": user_content
-                }
-                input_messages.append(user_msg)
-                seen_user_messages.add(user_content)
-
-        elif event_name in ("gen_ai.assistant.message", "gen_ai.choice"):
-            assistant_content = body.get("content") or ""
-            tool_calls = body.get("tool_calls", [])
-
-            message_key = f"{assistant_content}:{json.dumps(tool_calls) if tool_calls else ''}"
-
-            if assistant_content or tool_calls:
-                if message_key not in seen_assistant_messages:
-                    assistant_msg = {
-                        "role": "assistant",
-                        "content": assistant_content
-                    }
-                    if tool_calls:
-                        assistant_msg["tool_calls"] = tool_calls
-                    output_messages.append(assistant_msg)
-                    seen_assistant_messages.add(message_key)
-
-    if not (input_messages or output_messages):
-        return spans
-
-    enriched_spans = []
-    for i, span in enumerate(spans):
-        span_copy = span.copy()
-
-        if "attributes" not in span_copy:
-            span_copy["attributes"] = []
-
-        attrs = span_copy["attributes"]
-
-        if input_messages:
-            attrs.append({
-                "key": "gen_ai.input.messages",
-                "value": {"stringValue": json.dumps(input_messages)}
-            })
-
-        if output_messages:
-            attrs.append({
-                "key": "gen_ai.output.messages",
-                "value": {"stringValue": json.dumps(output_messages)}
-            })
-
-        enriched_spans.append(span_copy)
-
-    return enriched_spans
 
 
 @streaming_router.post("/get-trace")
@@ -378,7 +304,23 @@ async def get_trace(request: GetTraceRequest):
 
         unified_trace_id = session.trace_id
 
-        enriched_spans = _enrich_spans_with_logs(session.spans, session.logs)
+        has_genai_spans = any(
+            span.get("attributes", [])
+            and any(
+                attr.get("key") in ("gen_ai.request.model", "gen_ai.input.messages")
+                for attr in span.get("attributes", [])
+            )
+            for span in session.spans
+        )
+
+        if has_genai_spans and not session.logs:
+            logger.warning(
+                "Session %s has GenAI spans but no logs. "
+                "Message content will be missing unless spans already enriched.",
+                request.session_id
+            )
+
+        enriched_spans = enrich_spans_with_logs(session.spans, session.logs)
 
         for span in enriched_spans:
             span_copy = span.copy()

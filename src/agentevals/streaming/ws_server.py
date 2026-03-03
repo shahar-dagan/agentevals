@@ -17,6 +17,7 @@ from .incremental_processor import IncrementalInvocationExtractor
 from ..converter import convert_traces
 from ..loader.base import Trace
 from ..loader.otlp import OtlpJsonLoader
+from ..utils.log_enrichment import enrich_spans_with_logs
 
 logger = logging.getLogger(__name__)
 
@@ -169,6 +170,18 @@ class StreamingTraceManager:
                         continue
 
                     session = self.sessions[sid]
+
+                    if not session.can_accept_span():
+                        logger.warning(
+                            "Session %s has reached max span limit (%d), rejecting new span",
+                            sid, len(session.spans)
+                        )
+                        await websocket.send_json({
+                            "type": "error",
+                            "message": f"Session has reached maximum span limit ({len(session.spans)})"
+                        })
+                        continue
+
                     session.spans.append(event["span"])
 
                     extractor = self.incremental_extractors.get(sid)
@@ -195,6 +208,18 @@ class StreamingTraceManager:
                         continue
 
                     session = self.sessions[sid]
+
+                    if not session.can_accept_log():
+                        logger.warning(
+                            "Session %s has reached max log limit (%d), rejecting new log",
+                            sid, len(session.logs)
+                        )
+                        await websocket.send_json({
+                            "type": "error",
+                            "message": f"Session has reached maximum log limit ({len(session.logs)})"
+                        })
+                        continue
+
                     session.logs.append(log_event)
 
                     extractor = self.incremental_extractors.get(sid)
@@ -242,95 +267,7 @@ class StreamingTraceManager:
 
     def _enrich_spans_with_logs(self, spans: list[dict], logs: list[dict], session_id: str = None) -> list[dict]:
         """Enrich spans with message content from GenAI logs."""
-        if not logs:
-            return spans
-
-        logger.debug(f"Enriching {len(spans)} spans with {len(logs)} logs")
-
-        input_messages = []
-        output_messages = []
-        seen_user_messages = set()
-        seen_assistant_messages = set()
-
-        assistant_log_count = 0
-        for log in logs:
-            if log.get("event_name") in ("gen_ai.assistant.message", "gen_ai.choice"):
-                assistant_log_count += 1
-
-        logger.debug(f"Found {assistant_log_count} assistant log events")
-
-        for log in logs:
-            event_name = log.get("event_name", "")
-            body = log.get("body", {})
-
-            if not isinstance(body, dict):
-                continue
-
-            if event_name == "gen_ai.user.message":
-                user_content = body.get("content", "")
-                if user_content and user_content not in seen_user_messages:
-                    user_msg = {
-                        "role": "user",
-                        "content": user_content
-                    }
-                    input_messages.append(user_msg)
-                    seen_user_messages.add(user_content)
-
-            elif event_name in ("gen_ai.assistant.message", "gen_ai.choice"):
-                assistant_content = body.get("content") or ""
-                tool_calls = body.get("tool_calls", [])
-
-                message_key = f"{assistant_content}:{json.dumps(tool_calls) if tool_calls else ''}"
-
-                if assistant_content or tool_calls:
-                    if message_key not in seen_assistant_messages:
-                        assistant_msg = {
-                            "role": "assistant",
-                            "content": assistant_content
-                        }
-                        if tool_calls:
-                            assistant_msg["tool_calls"] = tool_calls
-                        output_messages.append(assistant_msg)
-                        seen_assistant_messages.add(message_key)
-
-        if not (input_messages or output_messages):
-            logger.warning("No messages extracted from logs")
-            return spans
-
-        logger.debug(f"Deduplicated: {len(input_messages)} user, {len(output_messages)} assistant messages")
-        for i, msg in enumerate(output_messages):
-            logger.debug(f"  Output message {i}: content_len={len(msg.get('content', ''))}, has_tool_calls={bool(msg.get('tool_calls'))}")
-
-        enriched_spans = []
-        for i, span in enumerate(spans):
-            span_copy = span.copy()
-
-            if "attributes" not in span_copy:
-                span_copy["attributes"] = []
-
-            attrs = span_copy["attributes"]
-
-            if input_messages:
-                attrs.append({
-                    "key": "gen_ai.input.messages",
-                    "value": {"stringValue": json.dumps(input_messages)}
-                })
-
-            if output_messages:
-                attrs.append({
-                    "key": "gen_ai.output.messages",
-                    "value": {"stringValue": json.dumps(output_messages)}
-                })
-
-            if session_id:
-                attrs.append({
-                    "key": "gen_ai.agent.name",
-                    "value": {"stringValue": session_id}
-                })
-
-            enriched_spans.append(span_copy)
-
-        return enriched_spans
+        return enrich_spans_with_logs(spans, logs, session_id)
 
     async def _save_spans_to_temp_file(self, session: TraceSession) -> Path:
         """Save spans to a temporary OTLP JSONL file.
@@ -373,6 +310,22 @@ class StreamingTraceManager:
         try:
             import tempfile
             temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False)
+
+            has_genai_spans = any(
+                span.get("attributes", [])
+                and any(
+                    attr.get("key") in ("gen_ai.request.model", "gen_ai.input.messages")
+                    for attr in span.get("attributes", [])
+                )
+                for span in session.spans
+            )
+
+            if has_genai_spans and not session.logs:
+                logger.warning(
+                    "Session %s has GenAI spans but no logs. "
+                    "Message content will be missing unless spans already enriched.",
+                    session.session_id
+                )
 
             enriched_spans = self._enrich_spans_with_logs(session.spans, session.logs, session.session_id)
 
@@ -446,9 +399,10 @@ class StreamingTraceManager:
             return []
 
     def _extract_model_info_from_trace(self, trace: Trace, invocation_idx: int) -> dict:
-        """Extract model information from call_llm spans in the trace.
+        """Extract model information from LLM spans in the trace.
 
-        Parses LLM request/response tags from call_llm spans to extract:
+        Supports both ADK and GenAI semantic convention formats.
+        Extracts:
         - Model name(s) used
         - Total input tokens (prompt tokens)
         - Total output tokens (response tokens)
@@ -468,18 +422,34 @@ class StreamingTraceManager:
         total_input_tokens = 0
         total_output_tokens = 0
 
-        invoke_spans = [s for s in trace.all_spans if 'invoke_agent' in s.operation_name]
-        if invocation_idx >= len(invoke_spans):
-            return model_info
-
-        invoke_span = invoke_spans[invocation_idx]
-        call_llm_spans = [
+        llm_spans = [
             s for s in trace.all_spans
-            if 'call_llm' in s.operation_name and s.parent_span_id == invoke_span.span_id
+            if s.get_tag("gen_ai.request.model") or 'call_llm' in s.operation_name
         ]
 
-        for call_llm_span in call_llm_spans:
-            llm_request_raw = call_llm_span.get_tag("gcp.vertex.agent.llm_request", "{}")
+        if not llm_spans:
+            return model_info
+
+        for llm_span in llm_spans:
+            genai_model = llm_span.get_tag("gen_ai.request.model")
+            if genai_model:
+                models_used.add(genai_model)
+
+            genai_input_tokens = llm_span.get_tag("gen_ai.usage.input_tokens")
+            if genai_input_tokens is not None:
+                try:
+                    total_input_tokens += int(genai_input_tokens)
+                except (ValueError, TypeError):
+                    pass
+
+            genai_output_tokens = llm_span.get_tag("gen_ai.usage.output_tokens")
+            if genai_output_tokens is not None:
+                try:
+                    total_output_tokens += int(genai_output_tokens)
+                except (ValueError, TypeError):
+                    pass
+
+            llm_request_raw = llm_span.get_tag("gcp.vertex.agent.llm_request", "{}")
             try:
                 llm_request = json.loads(llm_request_raw)
                 if "model" in llm_request:
@@ -487,7 +457,7 @@ class StreamingTraceManager:
             except Exception:
                 pass
 
-            llm_response_raw = call_llm_span.get_tag("gcp.vertex.agent.llm_response", "{}")
+            llm_response_raw = llm_span.get_tag("gcp.vertex.agent.llm_response", "{}")
             try:
                 llm_response = json.loads(llm_response_raw)
                 usage = llm_response.get("usage_metadata", {})

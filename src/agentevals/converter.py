@@ -5,6 +5,8 @@ Supports two trace formats:
 2. GenAI semantic conventions (standard gen_ai.* attributes from LangChain, LlamaIndex, etc.)
 
 Automatically detects the format and routes to the appropriate converter.
+Format detection checks span attributes and falls back to checking all spans if needed.
+Explicit format can be specified via the format parameter to convert_trace().
 """
 
 from __future__ import annotations
@@ -20,6 +22,8 @@ from google.genai import types as genai_types
 from .loader.base import Span, Trace
 
 logger = logging.getLogger(__name__)
+
+FORMAT_DETECTION_SPAN_LIMIT = 10
 
 # Tag keys used by the ADK OTel instrumentation (gcp.vertex.agent scope).
 _TAG_SCOPE = "otel.scope.name"
@@ -41,9 +45,22 @@ class ConversionResult:
     warnings: list[str] = field(default_factory=list)
 
 
-def convert_trace(trace: Trace) -> ConversionResult:
-    trace_format = _detect_trace_format(trace)
-    logger.info(f"Auto-detected trace format: {trace_format}")
+def convert_trace(trace: Trace, format: str | None = None) -> ConversionResult:
+    """Convert a trace to Invocation objects.
+
+    Args:
+        trace: The trace to convert
+        format: Optional explicit format ("adk" or "genai"). If None, auto-detects.
+
+    Returns:
+        ConversionResult with invocations and any warnings
+    """
+    if format is None:
+        trace_format = _detect_trace_format(trace)
+        logger.info(f"Auto-detected trace format: {trace_format} for trace {trace.trace_id}")
+    else:
+        trace_format = format
+        logger.info(f"Using explicit trace format: {trace_format} for trace {trace.trace_id}")
 
     if trace_format == "genai":
         from .genai_converter import convert_genai_trace
@@ -53,13 +70,49 @@ def convert_trace(trace: Trace) -> ConversionResult:
 
 
 def _detect_trace_format(trace: Trace) -> str:
-    for span in trace.all_spans[:10]:
-        if span.get_tag(_TAG_SCOPE) == _ADK_SCOPE:
-            return "adk"
+    """Detect trace format by inspecting span attributes.
 
-        if span.get_tag("gen_ai.request.model") or span.get_tag("gen_ai.input.messages"):
-            return "genai"
+    Checks spans for format indicators:
+    - ADK: otel.scope.name == "gcp.vertex.agent"
+    - GenAI: gen_ai.request.model or gen_ai.input.messages attributes
 
+    First checks a limited number of spans for performance, then falls back
+    to checking all spans if inconclusive.
+
+    Returns:
+        "adk" or "genai"
+    """
+    def check_spans(spans: list[Span]) -> str | None:
+        for span in spans:
+            if span.get_tag(_TAG_SCOPE) == _ADK_SCOPE:
+                return "adk"
+
+            if span.get_tag("gen_ai.request.model") or span.get_tag("gen_ai.input.messages"):
+                return "genai"
+        return None
+
+    initial_check = check_spans(trace.all_spans[:FORMAT_DETECTION_SPAN_LIMIT])
+    if initial_check:
+        logger.debug(
+            f"Trace {trace.trace_id}: detected {initial_check} format "
+            f"in first {FORMAT_DETECTION_SPAN_LIMIT} spans"
+        )
+        return initial_check
+
+    if len(trace.all_spans) > FORMAT_DETECTION_SPAN_LIMIT:
+        logger.debug(
+            f"Trace {trace.trace_id}: checking all {len(trace.all_spans)} spans "
+            f"for format detection"
+        )
+        full_check = check_spans(trace.all_spans)
+        if full_check:
+            logger.debug(f"Trace {trace.trace_id}: detected {full_check} format in full scan")
+            return full_check
+
+    logger.warning(
+        f"Trace {trace.trace_id}: no format indicators found in {len(trace.all_spans)} spans, "
+        f"defaulting to ADK format"
+    )
     return "adk"
 
 

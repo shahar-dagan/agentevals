@@ -1,7 +1,5 @@
 """Convert trace spans using GenAI semantic conventions into ADK Invocation objects.
 
-TODO test this properly.
-
 Supports traces from frameworks using OpenTelemetry GenAI semantic conventions:
 - LangChain (via LANGSMITH_OTEL_ENABLED)
 - LlamaIndex
@@ -46,6 +44,20 @@ def convert_genai_trace(trace: Trace) -> ConversionResult:
     logger.debug(f"Converting GenAI trace {trace.trace_id} ({len(trace.all_spans)} spans)")
 
     llm_root_spans = [s for s in trace.root_spans if _is_llm_span(s)]
+
+    if llm_root_spans:
+        has_messages = any(
+            s.get_tag(_TAG_GEN_AI_INPUT_MESSAGES) or s.get_tag(_TAG_GEN_AI_OUTPUT_MESSAGES)
+            for s in llm_root_spans
+        )
+        if not has_messages:
+            msg = (
+                f"Trace {trace.trace_id}: GenAI LLM spans found but missing message content. "
+                "This usually means logs were not enriched into spans. "
+                "Conversion may fail or produce incomplete results."
+            )
+            logger.warning(msg)
+            result.warnings.append(msg)
 
     if len(llm_root_spans) > 1:
         has_enriched = any(
