@@ -124,7 +124,7 @@ class AgentEvalsStreamingProcessor:
                 logger.info("Waiting for %d pending span sends to complete...", len(self._pending_sends))
                 for future in list(self._pending_sends):
                     try:
-                        future.result(timeout=5)
+                        await asyncio.wrap_future(future)
                     except Exception as exc:
                         logger.warning("Pending send failed during shutdown: %s", exc)
                 logger.info("All pending sends completed")
