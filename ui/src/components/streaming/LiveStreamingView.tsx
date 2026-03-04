@@ -155,6 +155,7 @@ export function LiveStreamingView() {
               ...session.liveStats,
               totalInputTokens: session.liveStats.totalInputTokens + (data.inputTokens || 0),
               totalOutputTokens: session.liveStats.totalOutputTokens + (data.outputTokens || 0),
+              ...(data.model && data.model !== 'unknown' ? { model: data.model } : {}),
             };
 
             if (import.meta.env.DEV) {

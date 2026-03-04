@@ -65,6 +65,7 @@ export function SessionCard({ session, isSelected, onSelect, evaluationResult }:
     }, 0) || 0;
 
   const modelName = session.metadata?.model ||
+    session.liveStats?.model ||
     session.invocations?.[0]?.modelInfo?.models?.[0] ||
     'Unknown';
 

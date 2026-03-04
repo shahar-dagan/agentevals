@@ -318,6 +318,7 @@ export interface LiveSession {
   liveStats: {
     totalInputTokens: number;
     totalOutputTokens: number;
+    model?: string;
   };
   startedAt: string;
 }
