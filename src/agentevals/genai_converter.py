@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
+from typing import Any
 
 from google.adk.evaluation.eval_case import IntermediateData, Invocation
 from google.genai import types as genai_types
@@ -36,6 +37,30 @@ class ConversionResult:
     trace_id: str
     invocations: list[Invocation] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+
+
+@dataclass
+class _ToolCall:
+    name: str
+    args: dict
+    id: str | None = None
+
+
+@dataclass
+class _ToolResponse:
+    name: str
+    response: dict
+    id: str | None = None
+
+
+@dataclass
+class _ConversationTurn:
+    invocation_id: str
+    user_text: str
+    assistant_text: str
+    tool_calls: list[_ToolCall] = field(default_factory=list)
+    tool_responses: list[_ToolResponse] = field(default_factory=list)
+    start_time: float = 0.0
 
 
 def convert_genai_trace(trace: Trace) -> ConversionResult:
@@ -68,14 +93,14 @@ def convert_genai_trace(trace: Trace) -> ConversionResult:
         if has_enriched:
             logger.debug(f"Multi-turn conversation: {len(llm_root_spans)} LLM spans")
             try:
-                invocations = _convert_multiturn_conversation(llm_root_spans, trace)
-                result.invocations.extend(invocations)
-                return result
+                turns = _extract_multiturn_turns(llm_root_spans)
+                for turn in turns:
+                    result.invocations.append(_turn_to_invocation(turn))
             except Exception as exc:
                 msg = f"Trace {trace.trace_id}: failed to convert multi-turn conversation: {exc}"
                 logger.warning(msg)
                 result.warnings.append(msg)
-                return result
+            return result
 
     invocation_spans = _find_genai_invocation_spans(trace)
     logger.debug(f"Found {len(invocation_spans)} invocation spans")
@@ -88,8 +113,8 @@ def convert_genai_trace(trace: Trace) -> ConversionResult:
 
     for inv_span in invocation_spans:
         try:
-            invocation = _convert_genai_invocation(inv_span)
-            result.invocations.append(invocation)
+            turn = _extract_single_turn(inv_span)
+            result.invocations.append(_turn_to_invocation(turn))
         except Exception as exc:
             msg = f"Failed to convert span {inv_span.span_id}: {exc}"
             logger.warning(msg)
@@ -134,119 +159,8 @@ def _find_genai_invocation_spans(trace: Trace) -> list[Span]:
     return candidates
 
 
-def _is_genai_invocation_span(span: Span) -> bool:
-    op_lower = span.operation_name.lower()
-    invocation_keywords = ["agent", "chain", "executor", "workflow"]
-    return any(keyword in op_lower for keyword in invocation_keywords)
-
-
-def _has_llm_children(span: Span) -> bool:
-    for child in span.children:
-        if _is_llm_span(child):
-            return True
-        if _has_llm_children(child):
-            return True
-    return False
-
-
-def _is_llm_span(span: Span) -> bool:
-    return (
-        span.get_tag(_TAG_GEN_AI_REQUEST_MODEL) is not None
-        or span.get_tag(_TAG_GEN_AI_INPUT_MESSAGES) is not None
-    )
-
-
-def _convert_multiturn_conversation(llm_spans: list[Span], trace: Trace) -> list[Invocation]:
-
-    messages_raw = llm_spans[0].get_tag(_TAG_GEN_AI_INPUT_MESSAGES, "[]")
-    all_input_messages = _parse_json(messages_raw, "gen_ai.input.messages")
-
-    output_messages_raw = llm_spans[0].get_tag(_TAG_GEN_AI_OUTPUT_MESSAGES, "[]")
-    all_output_messages = _parse_json(output_messages_raw, "gen_ai.output.messages")
-
-    if not isinstance(all_input_messages, list) or not isinstance(all_output_messages, list):
-        logger.warning("Messages are not lists, falling back to single invocation")
-        user_content = _extract_genai_user_content(llm_spans[0])
-        final_response = _extract_genai_final_response(llm_spans[-1])
-        return [Invocation(
-            invocation_id=f"genai-{llm_spans[0].span_id}",
-            user_content=user_content,
-            final_response=final_response,
-            intermediate_data=IntermediateData(),
-        )]
-
-    user_messages = [msg for msg in all_input_messages if msg.get("role") in ("user", "human")]
-    assistant_messages = [msg for msg in all_output_messages if msg.get("role") in ("assistant", "model", "ai")]
-
-    logger.debug(f"Multi-turn: {len(user_messages)} user, {len(assistant_messages)} assistant messages")
-    for i, msg in enumerate(assistant_messages):
-        has_content = bool(msg.get("content"))
-        has_tools = bool(msg.get("tool_calls"))
-        logger.debug(f"  Assistant msg {i}: has_content={has_content}, has_tools={has_tools}")
-
-    invocations = []
-
-    assistant_idx = 0
-
-    for user_idx, user_msg in enumerate(user_messages):
-        user_text = user_msg.get("content", "")
-        if not user_text:
-            continue
-
-        user_content = genai_types.Content(
-            role="user",
-            parts=[genai_types.Part(text=user_text)]
-        )
-
-        tool_uses = []
-        final_response_text = ""
-
-        while assistant_idx < len(assistant_messages):
-            assistant_msg = assistant_messages[assistant_idx]
-
-            if assistant_msg.get("tool_calls"):
-                for tc in assistant_msg.get("tool_calls", []):
-                    if tc.get("type") == "function" and "function" in tc:
-                        func = tc["function"]
-                        args = _parse_json(func.get("arguments", "{}"), "tool_call.arguments")
-                        if not isinstance(args, dict):
-                            args = {}
-                        tool_uses.append(genai_types.FunctionCall(
-                            name=func.get("name"),
-                            args=args,
-                            id=tc.get("id"),
-                        ))
-
-            content = assistant_msg.get("content", "")
-            if content:
-                final_response_text = content
-                assistant_idx += 1
-                break
-
-            assistant_idx += 1
-
-        final_response = genai_types.Content(
-            role="model",
-            parts=[genai_types.Part(text=final_response_text)]
-        )
-
-        invocation_id = f"genai-turn-{user_idx+1}-{llm_spans[0].span_id[:8]}"
-
-        invocations.append(Invocation(
-            invocation_id=invocation_id,
-            user_content=user_content,
-            final_response=final_response,
-            intermediate_data=IntermediateData(
-                tool_uses=tool_uses,
-                tool_responses=[],
-            ),
-        ))
-
-    return invocations
-
-
-def _convert_genai_invocation(inv_span: Span) -> Invocation:
-    llm_spans = _find_genai_llm_spans(inv_span)
+def _extract_single_turn(inv_span: Span) -> _ConversationTurn:
+    llm_spans = _find_llm_spans(inv_span)
 
     logger.debug(f"Converting invocation span: {inv_span.operation_name}")
     logger.debug(f"Found {len(llm_spans)} LLM spans")
@@ -259,61 +173,125 @@ def _convert_genai_invocation(inv_span: Span) -> Invocation:
                 f"Invocation span {inv_span.span_id} has no LLM call spans"
             )
 
-    tool_spans = _find_genai_tool_spans(inv_span)
+    tool_spans = _find_tool_spans(inv_span)
     logger.debug(f"Found {len(tool_spans)} tool spans")
 
-    user_content = _extract_genai_user_content(llm_spans[0])
-    final_response = _extract_genai_final_response(llm_spans[-1])
-    tool_uses, tool_responses = _extract_genai_tools(tool_spans, llm_spans)
+    user_text = _extract_user_text(llm_spans[0])
+    assistant_text = _extract_assistant_text(llm_spans[-1])
+    tool_calls, tool_responses = _extract_tool_calls(tool_spans, llm_spans)
 
-    intermediate_data = IntermediateData(
-        tool_uses=tool_uses,
+    return _ConversationTurn(
+        invocation_id=f"genai-{inv_span.span_id}",
+        user_text=user_text,
+        assistant_text=assistant_text,
+        tool_calls=tool_calls,
         tool_responses=tool_responses,
+        start_time=float(inv_span.start_time),
     )
 
-    invocation_id = f"genai-{inv_span.span_id}"
 
+def _extract_multiturn_turns(llm_spans: list[Span]) -> list[_ConversationTurn]:
+    messages_raw = llm_spans[0].get_tag(_TAG_GEN_AI_INPUT_MESSAGES, "[]")
+    all_input_messages = _parse_json(messages_raw, "gen_ai.input.messages")
+
+    output_messages_raw = llm_spans[0].get_tag(_TAG_GEN_AI_OUTPUT_MESSAGES, "[]")
+    all_output_messages = _parse_json(output_messages_raw, "gen_ai.output.messages")
+
+    if not isinstance(all_input_messages, list) or not isinstance(all_output_messages, list):
+        logger.warning("Messages are not lists, falling back to single invocation")
+        user_text = _extract_user_text(llm_spans[0])
+        assistant_text = _extract_assistant_text(llm_spans[-1])
+        return [_ConversationTurn(
+            invocation_id=f"genai-{llm_spans[0].span_id}",
+            user_text=user_text,
+            assistant_text=assistant_text,
+            start_time=float(llm_spans[0].start_time),
+        )]
+
+    user_messages = [msg for msg in all_input_messages if msg.get("role") in ("user", "human")]
+    assistant_messages = [msg for msg in all_output_messages if msg.get("role") in ("assistant", "model", "ai")]
+
+    logger.debug(f"Multi-turn: {len(user_messages)} user, {len(assistant_messages)} assistant messages")
+    for i, msg in enumerate(assistant_messages):
+        has_content = bool(msg.get("content"))
+        has_tools = bool(msg.get("tool_calls"))
+        logger.debug(f"  Assistant msg {i}: has_content={has_content}, has_tools={has_tools}")
+
+    turns = []
+    assistant_idx = 0
+
+    for user_idx, user_msg in enumerate(user_messages):
+        user_text = user_msg.get("content", "")
+        if not user_text:
+            continue
+
+        tool_calls: list[_ToolCall] = []
+        assistant_text = ""
+
+        while assistant_idx < len(assistant_messages):
+            assistant_msg = assistant_messages[assistant_idx]
+
+            if assistant_msg.get("tool_calls"):
+                for tc in assistant_msg.get("tool_calls", []):
+                    if tc.get("type") == "function" and "function" in tc:
+                        func = tc["function"]
+                        args = _parse_json(func.get("arguments", "{}"), "tool_call.arguments")
+                        if not isinstance(args, dict):
+                            args = {}
+                        tool_calls.append(_ToolCall(
+                            name=func.get("name", ""),
+                            args=args,
+                            id=tc.get("id"),
+                        ))
+
+            content = assistant_msg.get("content", "")
+            if content:
+                assistant_text = content
+                assistant_idx += 1
+                break
+
+            assistant_idx += 1
+
+        turns.append(_ConversationTurn(
+            invocation_id=f"genai-turn-{user_idx + 1}-{llm_spans[0].span_id[:8]}",
+            user_text=user_text if isinstance(user_text, str) else "",
+            assistant_text=assistant_text,
+            tool_calls=tool_calls,
+            start_time=float(llm_spans[0].start_time),
+        ))
+
+    return turns
+
+
+def _turn_to_invocation(turn: _ConversationTurn) -> Invocation:
+    user_content = genai_types.Content(
+        role="user",
+        parts=[genai_types.Part(text=turn.user_text)],
+    )
+    final_response = genai_types.Content(
+        role="model",
+        parts=[genai_types.Part(text=turn.assistant_text)],
+    )
+    tool_uses = [
+        genai_types.FunctionCall(name=tc.name, args=tc.args, id=tc.id)
+        for tc in turn.tool_calls
+    ]
+    tool_responses = [
+        genai_types.FunctionResponse(name=tr.name, response=tr.response, id=tr.id)
+        for tr in turn.tool_responses
+    ]
     return Invocation(
-        invocation_id=invocation_id,
+        invocation_id=turn.invocation_id,
         user_content=user_content,
         final_response=final_response,
-        intermediate_data=intermediate_data,
-        creation_timestamp=inv_span.start_time / 1_000_000.0,
+        intermediate_data=IntermediateData(tool_uses=tool_uses, tool_responses=tool_responses),
+        creation_timestamp=turn.start_time / 1_000_000.0,
     )
 
 
-def _find_genai_llm_spans(root: Span) -> list[Span]:
-    results = []
-    _walk_for_llm_spans(root, results)
-    results.sort(key=lambda s: s.start_time)
-    return results
-
-
-def _walk_for_llm_spans(span: Span, acc: list[Span]) -> None:
-    if _is_llm_span(span):
-        acc.append(span)
-    for child in span.children:
-        _walk_for_llm_spans(child, acc)
-
-
-def _find_genai_tool_spans(root: Span) -> list[Span]:
-    results = []
-    _walk_for_tool_spans(root, results)
-    results.sort(key=lambda s: s.start_time)
-    return results
-
-
-def _walk_for_tool_spans(span: Span, acc: list[Span]) -> None:
-    if span.get_tag(_TAG_GEN_AI_TOOL_NAME) is not None:
-        acc.append(span)
-    for child in span.children:
-        _walk_for_tool_spans(child, acc)
-
-
-def _extract_genai_user_content(llm_span: Span) -> genai_types.Content:
+def _extract_user_text(llm_span: Span) -> str:
     messages_raw = llm_span.get_tag(_TAG_GEN_AI_INPUT_MESSAGES, "[]")
     messages = _parse_json(messages_raw, "gen_ai.input.messages")
-
 
     if not isinstance(messages, list):
         messages = []
@@ -325,17 +303,11 @@ def _extract_genai_user_content(llm_span: Span) -> genai_types.Content:
             content_text = msg.get("content", "")
             if isinstance(content_text, str):
                 logger.debug(f"Found user message: {content_text[:100]}")
-                return genai_types.Content(
-                    role="user",
-                    parts=[genai_types.Part(text=content_text)],
-                )
+                return content_text
             elif isinstance(content_text, list):
-                parts = []
-                for item in content_text:
-                    if isinstance(item, dict) and "text" in item:
-                        parts.append(genai_types.Part(text=item["text"]))
+                parts = [item["text"] for item in content_text if isinstance(item, dict) and "text" in item]
                 if parts:
-                    return genai_types.Content(role="user", parts=parts)
+                    return " ".join(parts)
 
     logger.warning(f"No user message found in {len(messages)} messages")
     raise ValueError(
@@ -343,10 +315,9 @@ def _extract_genai_user_content(llm_span: Span) -> genai_types.Content:
     )
 
 
-def _extract_genai_final_response(llm_span: Span) -> genai_types.Content:
+def _extract_assistant_text(llm_span: Span) -> str:
     messages_raw = llm_span.get_tag(_TAG_GEN_AI_OUTPUT_MESSAGES, "[]")
     messages = _parse_json(messages_raw, "gen_ai.output.messages")
-
 
     if not isinstance(messages, list):
         messages = []
@@ -363,30 +334,24 @@ def _extract_genai_final_response(llm_span: Span) -> genai_types.Content:
             content_text = msg.get("content", "")
             if isinstance(content_text, str) and content_text:
                 logger.debug(f"Found assistant message with text: {content_text[:100]}")
-                return genai_types.Content(
-                    role="model",
-                    parts=[genai_types.Part(text=content_text)],
-                )
+                return content_text
             elif isinstance(content_text, list):
-                parts = []
-                for item in content_text:
-                    if isinstance(item, dict) and "text" in item:
-                        parts.append(genai_types.Part(text=item["text"]))
+                parts = [item["text"] for item in content_text if isinstance(item, dict) and "text" in item]
                 if parts:
-                    return genai_types.Content(role="model", parts=parts)
+                    return " ".join(parts)
 
     logger.warning(
         f"LLM span {llm_span.span_id}: no assistant message with content in gen_ai.output.messages ({len(messages)} messages)"
     )
-    return genai_types.Content(role="model", parts=[genai_types.Part(text="")])
+    return ""
 
 
-def _extract_genai_tools(
+def _extract_tool_calls(
     tool_spans: list[Span],
-    llm_spans: list[Span] = None,
-) -> tuple[list[genai_types.FunctionCall], list[genai_types.FunctionResponse]]:
-    tool_uses = []
-    tool_responses = []
+    llm_spans: list[Span] | None = None,
+) -> tuple[list[_ToolCall], list[_ToolResponse]]:
+    tool_calls: list[_ToolCall] = []
+    tool_responses: list[_ToolResponse] = []
 
     for tool_span in tool_spans:
         tool_name = tool_span.get_tag(_TAG_GEN_AI_TOOL_NAME)
@@ -401,12 +366,7 @@ def _extract_genai_tools(
         if not isinstance(args, dict):
             args = {}
 
-        fc = genai_types.FunctionCall(
-            name=tool_name,
-            args=args,
-            id=tool_call_id,
-        )
-        tool_uses.append(fc)
+        tool_calls.append(_ToolCall(name=tool_name, args=args, id=tool_call_id))
 
         result_raw = tool_span.get_tag(_TAG_GEN_AI_TOOL_CALL_RESULT)
         if result_raw:
@@ -416,12 +376,11 @@ def _extract_genai_tools(
 
             logger.debug(f"Tool {tool_name} result: {str(result_data)[:100]}")
 
-            fr = genai_types.FunctionResponse(
+            tool_responses.append(_ToolResponse(
                 name=tool_name,
                 response=result_data if isinstance(result_data, dict) else {"result": str(result_data)},
                 id=tool_call_id,
-            )
-            tool_responses.append(fr)
+            ))
 
     if llm_spans:
         for llm_span in llm_spans:
@@ -436,11 +395,11 @@ def _extract_genai_tools(
                     continue
 
                 if msg.get("role") in ("assistant", "model", "ai") and "tool_calls" in msg:
-                    tool_calls = msg.get("tool_calls", [])
-                    if not isinstance(tool_calls, list):
+                    tool_call_list = msg.get("tool_calls", [])
+                    if not isinstance(tool_call_list, list):
                         continue
 
-                    for tool_call in tool_calls:
+                    for tool_call in tool_call_list:
                         if not isinstance(tool_call, dict):
                             continue
 
@@ -455,15 +414,57 @@ def _extract_genai_tools(
                             if not isinstance(args, dict):
                                 args = {}
 
-                            fc = genai_types.FunctionCall(
+                            tool_calls.append(_ToolCall(
                                 name=tool_name,
                                 args=args,
                                 id=tool_call.get("id"),
-                            )
-                            tool_uses.append(fc)
+                            ))
 
-    logger.debug(f"Extracted {len(tool_uses)} tool calls, {len(tool_responses)} responses")
-    return tool_uses, tool_responses
+    logger.debug(f"Extracted {len(tool_calls)} tool calls, {len(tool_responses)} responses")
+    return tool_calls, tool_responses
+
+
+def _is_llm_span(span: Span) -> bool:
+    return (
+        span.get_tag(_TAG_GEN_AI_REQUEST_MODEL) is not None
+        or span.get_tag(_TAG_GEN_AI_INPUT_MESSAGES) is not None
+    )
+
+
+def _is_genai_invocation_span(span: Span) -> bool:
+    op_lower = span.operation_name.lower()
+    invocation_keywords = ["agent", "chain", "executor", "workflow"]
+    return any(keyword in op_lower for keyword in invocation_keywords)
+
+
+def _has_llm_children(span: Span) -> bool:
+    for child in span.children:
+        if _is_llm_span(child):
+            return True
+        if _has_llm_children(child):
+            return True
+    return False
+
+
+def _find_llm_spans(root: Span) -> list[Span]:
+    results: list[Span] = []
+    _walk_spans(root, _is_llm_span, results)
+    results.sort(key=lambda s: s.start_time)
+    return results
+
+
+def _find_tool_spans(root: Span) -> list[Span]:
+    results: list[Span] = []
+    _walk_spans(root, lambda s: s.get_tag(_TAG_GEN_AI_TOOL_NAME) is not None, results)
+    results.sort(key=lambda s: s.start_time)
+    return results
+
+
+def _walk_spans(span: Span, predicate: Any, acc: list[Span]) -> None:
+    if predicate(span):
+        acc.append(span)
+    for child in span.children:
+        _walk_spans(child, predicate, acc)
 
 
 def _parse_json(raw: str | dict | list | Any, tag_name: str) -> dict | list | Any:
