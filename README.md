@@ -2,23 +2,40 @@
 
 `agentevals` scores agent behavior from OpenTelemetry traces without re-running the agent. It parses trace spans from `otlp` streams, or Jaeger JSON format and evaluates them against golden eval sets using ADK's evaluation framework.
 
-Unlike ADK's LocalEvalService, which couples agent execution with evaluation, agentevals only handles scoring: it takes pre-recorded traces and compares them against expected behavior using metrics like tool trajectory matching, response quality, and LLM-based judgments.
-
 The tool provides a CLI for local dev work, scripting and CI pipelines, a web UI for visual inspection, EvalSet creation and interactive evaluation, and an MCP server so Claude Code can run evaluations and inspect live sessions directly from a conversation.
 
 > [!IMPORTANT]
 > This project is under active development. Expect breaking changes.
 
-## Getting Started
+## Installation
 
-Install dependencies using the Nix development environment (recommended) or uv:
+Install from a release wheel:
 
 ```bash
+# CLI + REST API (batch evaluation, lightweight)
+pip install agentevals
+
+# CLI + REST API + WebSocket streaming + MCP server
+pip install "agentevals[live]"
+
+# Bundled: same as [live] but also serves the web UI at localhost:8001
+pip install "agentevals-<version>-py3-none-any.whl[live]"
+```
+
+The bundled wheel is built with `make build-bundle` and includes the React UI baked in. See [DEVELOPMENT.md](DEVELOPMENT.md) for build instructions.
+
+## Getting Started
+
+Install dependencies using `uv` or Nix`:
+
+```bash
+# Using uv directly
+uv sync
+
 # Using Nix (includes all dependencies)
 nix develop .
 
-# Or using uv directly
-uv sync
+
 ```
 
 Run a quick evaluation:
@@ -55,27 +72,25 @@ uv run agentevals list-metrics
 
 ## Web UI
 
-The React-based UI provides visual trace inspection and interactive evaluation:
+The React-based UI provides visual trace inspection and interactive evaluation.
+
+**Installed bundle** (single command, UI served at port 8001):
 
 ```bash
-# Terminal 1: Start API server
-uv run uvicorn agentevals.api.app:app --reload --port 8000
+agentevals serve
+```
 
-# Terminal 2: Start UI dev server
+**From source** (two terminals):
+
+```bash
+# Terminal 1
+uv run agentevals serve --dev
+
+# Terminal 2
 cd ui && npm run dev
 ```
 
 Open http://localhost:5173 to upload traces and eval sets, select metrics, and view results with interactive span trees and actual vs expected comparisons.
-
-For rapid iteration during development, use the local dev mode to stream agent runs in real-time:
-
-```bash
-# Terminal 1: Start server in dev mode
-uv run agentevals serve --dev
-
-# Terminal 2: Start UI dev server
-cd ui && npm run dev
-```
 
 Push traces to the websocket endpoint and they'll appear live in the "Local Dev" tab. Select eval sets and metrics to evaluate the received traces, with results grouped by session ID for easy comparison across runs.
 
@@ -168,3 +183,10 @@ uv run pytest
 # Run specific test
 uv run pytest tests/test_runner.py -v
 ```
+
+## FAQ
+
+**How does this compare to ADK's evaulations?**
+Unlike ADK's LocalEvalService, which couples agent execution with evaluation, agentevals only handles scoring: it takes pre-recorded traces and compares them against expected behavior using metrics like tool trajectory matching, response quality, and LLM-based judgments. 
+
+However, if you're iterating on your agents locally, you can point your agents to agentevals and you will see rich runtime information in your browser. For more details, look into `agentevals[live]` and explore the Local Development option on the UI.

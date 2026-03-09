@@ -1,0 +1,61 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-caching: true
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Verify tag matches pyproject.toml version
+        run: |
+          TOML_VERSION=$(grep '^version' pyproject.toml | cut -d'"' -f2)
+          TAG_VERSION=${GITHUB_REF_NAME#v}
+          if [ "$TOML_VERSION" != "$TAG_VERSION" ]; then
+            echo "Error: tag $GITHUB_REF_NAME does not match pyproject.toml version $TOML_VERSION"
+            exit 1
+          fi
+
+      - name: Build core and bundled wheels
+        run: make release
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: wheels
+          path: dist/*.whl
+          archive: false
+
+  github-release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: wheels
+          path: dist/
+
+      - uses: softprops/action-gh-release@v2.5.0
+        with:
+          files: dist/*.whl
+          generate_release_notes: true
+

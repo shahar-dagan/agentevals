@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
 
 import click
@@ -193,7 +194,6 @@ def serve(dev: bool, host: str, port: int, eval_sets: str | None, headless: bool
     import uvicorn
     from pathlib import Path
 
-    # Configure logging for agentevals modules
     level = logging.WARNING
     if verbose == 1:
         level = logging.INFO
@@ -204,32 +204,51 @@ def serve(dev: bool, host: str, port: int, eval_sets: str | None, headless: bool
         format="%(levelname)s %(name)s: %(message)s",
     )
 
+    if headless:
+        os.environ["AGENTEVALS_HEADLESS"] = "1"
+
+    static_dir = Path(__file__).parent / "_static"
+    has_ui = static_dir.is_dir() and (static_dir / "index.html").exists()
+
+    if dev or (has_ui and not headless):
+        os.environ["AGENTEVALS_LIVE"] = "1"
+
     if dev:
-        click.echo("🚀 agentevals dev server starting...")
-        click.echo(f"   WebSocket: ws://{host}:{port}/ws/traces")
-        click.echo(f"   API:       http://{host}:{port}/api")
-        click.echo(f"   Web UI:    http://localhost:5173")
+        click.echo(f"agentevals dev server starting...")
+        click.echo(f"  WebSocket: ws://{host}:{port}/ws/traces")
+        click.echo(f"  API:       http://{host}:{port}/api")
+        click.echo(f"  Web UI:    http://localhost:5173")
         click.echo()
 
         if eval_sets:
-            click.echo(f"📊 Eval sets directory: {eval_sets}")
+            click.echo(f"  Eval sets: {eval_sets}")
             click.echo()
 
         click.echo("Waiting for agent connections...")
         click.echo()
 
         src_path = Path(__file__).parent.parent
-        reload_dirs = [str(src_path)]
-
         uvicorn.run(
             "agentevals.api.app:app",
             host=host,
             port=port,
             reload=True,
-            reload_dirs=reload_dirs,
+            reload_dirs=[str(src_path)],
             log_level="info",
         )
+    elif has_ui and not headless:
+        click.echo(f"agentevals: http://{host}:{port}")
+        click.echo()
+        uvicorn.run(
+            "agentevals.api.app:app",
+            host=host,
+            port=port,
+            reload=False,
+            log_level="warning",
+        )
     else:
+        click.echo(f"agentevals API: http://{host}:{port}/api")
+        click.echo()
         uvicorn.run(
             "agentevals.api.app:app",
             host=host,
@@ -247,7 +266,11 @@ def serve(dev: bool, host: str, port: int, eval_sets: str | None, headless: bool
 )
 def mcp_command(server_url: str | None) -> None:
     """Start the MCP server on stdio for use with Claude Code and other MCP clients."""
-    from .mcp_server import create_server
+    try:
+        from .mcp_server import create_server
+    except ImportError:
+        click.echo('MCP requires the live extras: pip install "agentevals[live]"', err=True)
+        sys.exit(1)
 
     create_server(server_url=server_url).run("stdio")
 

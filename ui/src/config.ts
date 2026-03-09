@@ -1,10 +1,9 @@
-/**
- * Application configuration.
- *
- * In production, these values can be overridden using environment variables.
- */
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ??
+    (import.meta.env.DEV ? 'http://localhost:8001' : '');
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8001';
+const WS_BASE_URL = import.meta.env.VITE_WS_URL ??
+    (import.meta.env.DEV ? 'ws://localhost:8001'
+     : `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}`);
 
 export const config = {
   api: {
@@ -22,6 +21,6 @@ export const config = {
     },
   },
   websocket: {
-    tracesUrl: import.meta.env.VITE_WS_URL || 'ws://localhost:8001/ws/traces',
+    tracesUrl: `${WS_BASE_URL}/ws/traces`,
   },
 } as const;
