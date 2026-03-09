@@ -13,6 +13,7 @@ from typing import Optional
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 
+from agentevals import __version__
 from ..config import EvalRunConfig
 from ..runner import RunResult, load_eval_set, run_evaluation, _extract_performance_metrics, get_loader
 
@@ -24,7 +25,7 @@ router = APIRouter()
 @router.get("/health")
 async def health_check():
     """Health check endpoint."""
-    return {"status": "ok", "version": "0.1.0"}
+    return {"status": "ok", "version": __version__}
 
 
 @router.get("/metrics")
