@@ -17,7 +17,6 @@ export const InspectorView: React.FC = () => {
   const [selectedInvocationId, setSelectedInvocationId] = useState<string | null>(null);
 
   // Loaded trace data
-  const [trace, setTrace] = useState<Trace | null>(null);
   const [invocations, setInvocations] = useState<Invocation[]>([]);
   const [expectedInvocations, setExpectedInvocations] = useState<Invocation[]>([]);
   const [loading, setLoading] = useState(true);
@@ -68,8 +67,6 @@ export const InspectorView: React.FC = () => {
           setLoading(false);
           return;
         }
-
-        setTrace(foundTrace);
 
         // Convert to invocations
         const conversionResults = convertTracesToInvocations([foundTrace]);
