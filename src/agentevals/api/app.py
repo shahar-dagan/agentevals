@@ -11,6 +11,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from .routes import router
+from .debug_routes import debug_router, set_trace_manager as set_debug_trace_manager
+from ..utils.log_buffer import log_buffer
 from agentevals import __version__
 
 try:
@@ -37,6 +39,7 @@ app.add_middleware(
 )
 
 app.include_router(router, prefix="/api")
+app.include_router(debug_router, prefix="/api/debug")
 
 _live_mode = os.getenv("AGENTEVALS_LIVE") == "1"
 _trace_manager = None
@@ -49,6 +52,7 @@ if _live_mode:
     app.include_router(streaming_router, prefix="/api/streaming")
     _trace_manager = StreamingTraceManager()
     set_trace_manager(_trace_manager)
+    set_debug_trace_manager(_trace_manager)
 
     @app.websocket("/ws/traces")
     async def websocket_endpoint(websocket: WebSocket):
@@ -106,7 +110,10 @@ async def on_startup():
         format="%(levelname)s:%(name)s:%(message)s",
         force=True,
     )
-    logging.getLogger("agentevals").setLevel(log_level)
+    ae_logger = logging.getLogger("agentevals")
+    ae_logger.setLevel(log_level)
+    log_buffer.setFormatter(logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
+    ae_logger.addHandler(log_buffer)
     if _trace_manager:
         _trace_manager.start_cleanup_task()
 
