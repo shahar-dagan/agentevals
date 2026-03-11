@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import { TraceContext } from './TraceContext';
 import type { TraceState } from './TraceContext';
 import type { ViewType, EvalSet, EvalSetMetadata, EvalCase, LiveSession, AnnotationQueue, Annotation } from '../lib/types';
-import { evaluateTracesStreaming, getConfig } from '../api/client';
+import { evaluateTracesStreaming, getConfig, healthCheck } from '../api/client';
 import { extractMetadataFromTraceFile } from '../lib/trace-metadata';
 
 interface TraceProviderProps {
@@ -30,6 +30,7 @@ export const TraceProvider: React.FC<TraceProviderProps> = ({ children }) => {
     evaluationOrigin: null,
     selectedTraceId: null,
     selectedSpanId: null,
+    version: null,
     streamingSessions: new Map(),
     annotationQueues: [],
     currentAnnotationQueueId: null,
@@ -41,7 +42,10 @@ export const TraceProvider: React.FC<TraceProviderProps> = ({ children }) => {
   useEffect(() => {
     getConfig()
       .then((cfg) => setState((prev) => ({ ...prev, apiKeyStatus: cfg.apiKeys })))
-      .catch(() => {}); // silently ignore if backend is unreachable
+      .catch(() => {});
+    healthCheck()
+      .then((data) => setState((prev) => ({ ...prev, version: data.version ?? null })))
+      .catch(() => {});
   }, []);
 
   const actions = useMemo(

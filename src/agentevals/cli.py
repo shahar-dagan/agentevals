@@ -17,12 +17,14 @@ import sys
 
 import click
 
+from . import __version__
 from .config import EvalRunConfig
 from .output import format_results
 from .runner import run_evaluation
 
 
 @click.group()
+@click.version_option(version=__version__, prog_name="agentevals")
 @click.option(
     "-v",
     "--verbose",

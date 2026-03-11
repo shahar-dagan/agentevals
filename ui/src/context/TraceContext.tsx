@@ -32,6 +32,7 @@ export interface TraceState {
   evaluationOrigin: ViewType | null;
   selectedTraceId: string | null;
   selectedSpanId: string | null;
+  version: string | null;
 
   // Streaming state
   streamingSessions: Map<string, LiveSession>;

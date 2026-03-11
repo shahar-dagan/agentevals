@@ -54,6 +54,10 @@ export const Sidebar: React.FC = () => {
           EvalSet Builder
         </button>
       </div>
+
+      {state.version && (
+        <div css={footerStyle}>v{state.version}</div>
+      )}
     </nav>
   );
 };
@@ -113,6 +117,15 @@ const navItemStyle = css`
     color: var(--text-primary);
     background: var(--bg-elevated);
   }
+`;
+
+const footerStyle = css`
+  margin-top: auto;
+  padding: 16px 20px;
+  border-top: 1px solid var(--border-default);
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
 `;
 
 const activeItemStyle = css`
