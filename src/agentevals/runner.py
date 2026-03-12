@@ -151,26 +151,44 @@ async def run_evaluation(
     if progress_callback:
         await progress_callback(f"Evaluating {total_traces} trace{'s' if total_traces != 1 else ''}...")
 
-    for idx, conv_result in enumerate(conversion_results):
-        if progress_callback:
-            trace_id_short = conv_result.trace_id[:12] + "..." if len(conv_result.trace_id) > 12 else conv_result.trace_id
-            await progress_callback(f"Trace {idx + 1}/{total_traces}: {trace_id_short}")
+    trace_semaphore = asyncio.Semaphore(config.max_concurrent_traces)
+    eval_semaphore = asyncio.Semaphore(config.max_concurrent_evals)
 
-        trace = trace_map.get(conv_result.trace_id)
+    async def _evaluate_trace_bounded(idx: int, conv_result: ConversionResult) -> TraceResult:
+        async with trace_semaphore:
+            if progress_callback:
+                trace_id_short = conv_result.trace_id[:12] + "..." if len(conv_result.trace_id) > 12 else conv_result.trace_id
+                await progress_callback(f"Trace {idx + 1}/{total_traces}: {trace_id_short}")
 
-        trace_result = await _evaluate_trace(
-            conv_result=conv_result,
-            metrics=config.metrics,
-            eval_set=eval_set,
-            judge_model=config.judge_model,
-            threshold=config.threshold,
-            progress_callback=progress_callback,
-            trace_progress_callback=trace_progress_callback,
-            trace=trace,
-            performance_metrics=perf_metrics_map.get(conv_result.trace_id),
-        )
+            trace = trace_map.get(conv_result.trace_id)
 
-        result.trace_results.append(trace_result)
+            return await _evaluate_trace(
+                conv_result=conv_result,
+                metrics=config.metrics,
+                eval_set=eval_set,
+                judge_model=config.judge_model,
+                threshold=config.threshold,
+                eval_semaphore=eval_semaphore,
+                progress_callback=progress_callback,
+                trace_progress_callback=trace_progress_callback,
+                trace=trace,
+                performance_metrics=perf_metrics_map.get(conv_result.trace_id),
+            )
+
+    trace_results = await asyncio.gather(
+        *[
+            _evaluate_trace_bounded(idx, conv_result)
+            for idx, conv_result in enumerate(conversion_results)
+        ],
+        return_exceptions=True,
+    )
+
+    for tr in trace_results:
+        if isinstance(tr, Exception):
+            logger.error("Unexpected error evaluating trace: %s", tr)
+            result.errors.append(str(tr))
+        else:
+            result.trace_results.append(tr)
 
     if progress_callback:
         await progress_callback("Evaluation complete")
@@ -208,6 +226,7 @@ async def _evaluate_trace(
     eval_set: EvalSet | None,
     judge_model: str | None,
     threshold: float | None,
+    eval_semaphore: asyncio.Semaphore,
     progress_callback: Optional[ProgressCallback] = None,
     trace_progress_callback: Optional[TraceProgressCallback] = None,
     trace = None,
@@ -237,21 +256,25 @@ async def _evaluate_trace(
     if eval_set:
         expected_invocations = _find_expected_invocations(actual_invocations, eval_set)
 
-    for metric_name in metrics:
-        if progress_callback:
-            await progress_callback(f"Running {metric_name}...")
-
-        metric_result = await _evaluate_metric(
-            metric_name=metric_name,
-            actual_invocations=actual_invocations,
-            expected_invocations=expected_invocations,
-            judge_model=judge_model,
-            threshold=threshold,
-        )
-        trace_result.metric_results.append(metric_result)
-
+    async def _eval_metric_with_semaphore(metric_name: str) -> MetricResult:
+        async with eval_semaphore:
+            if progress_callback:
+                await progress_callback(f"Running {metric_name}...")
+            result = await _evaluate_metric(
+                metric_name=metric_name,
+                actual_invocations=actual_invocations,
+                expected_invocations=expected_invocations,
+                judge_model=judge_model,
+                threshold=threshold,
+            )
+        trace_result.metric_results.append(result)
         if trace_progress_callback:
             await trace_progress_callback(trace_result)
+        return result
+
+    await asyncio.gather(
+        *[_eval_metric_with_semaphore(m) for m in metrics]
+    )
 
     return trace_result
 
@@ -317,7 +340,8 @@ async def _evaluate_metric(
                 expected_invocations=expected_invocations,
             )
         else:
-            eval_result: EvaluationResult = evaluator.evaluate_invocations(
+            eval_result: EvaluationResult = await asyncio.to_thread(
+                evaluator.evaluate_invocations,
                 actual_invocations=actual_invocations,
                 expected_invocations=expected_invocations,
             )

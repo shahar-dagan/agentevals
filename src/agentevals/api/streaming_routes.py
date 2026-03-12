@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -150,62 +151,58 @@ async def evaluate_sessions(request: EvaluateSessionsRequest):
         json.dump(eval_set_response["eval_set"], eval_set_file)
         eval_set_file.close()
 
-        results = []
+        sessions_to_evaluate = [
+            (session_id, session)
+            for session_id, session in trace_manager.sessions.items()
+            if session.is_complete
+        ]
 
-        logger.info("Evaluating sessions. Total sessions: %d", len(trace_manager.sessions))
+        logger.info("Evaluating %d complete sessions (of %d total)", len(sessions_to_evaluate), len(trace_manager.sessions))
 
-        for session_id, session in trace_manager.sessions.items():
-            logger.info("Checking session %s: is_complete=%s", session_id, session.is_complete)
+        sem = asyncio.Semaphore(5)
 
-            if not session.is_complete:
-                logger.info("Skipping incomplete session: %s", session_id)
-                continue
+        async def eval_one_session(session_id: str, session) -> dict:
+            async with sem:
+                try:
+                    trace_file = await trace_manager._save_spans_to_temp_file(session)
 
-            logger.info("Evaluating session: %s", session_id)
+                    config = EvalRunConfig(
+                        trace_files=[str(trace_file)],
+                        trace_format="otlp-json",
+                        eval_set_file=eval_set_file.name,
+                        metrics=request.metrics,
+                        judge_model=request.judge_model,
+                    )
 
-            try:
-                trace_file = await trace_manager._save_spans_to_temp_file(session)
-                logger.info("Saved trace file for session %s: %s", session_id, trace_file)
+                    eval_result = await run_evaluation(config)
 
-                config = EvalRunConfig(
-                    trace_files=[str(trace_file)],
-                    trace_format="otlp-json",
-                    eval_set_file=eval_set_file.name,
-                    metrics=request.metrics,
-                    judge_model=request.judge_model,
-                )
+                    if eval_result.trace_results:
+                        trace_result = eval_result.trace_results[0]
+                        return {
+                            "sessionId": session_id,
+                            "traceId": trace_result.trace_id,
+                            "numInvocations": trace_result.num_invocations,
+                            "metricResults": [
+                                {
+                                    "metricName": mr.metric_name,
+                                    "score": mr.score,
+                                    "evalStatus": mr.eval_status,
+                                    "error": mr.error,
+                                }
+                                for mr in trace_result.metric_results
+                            ],
+                        }
+                    else:
+                        logger.warning("No trace results for session %s", session_id)
+                        return {"sessionId": session_id, "error": "No trace results"}
 
-                logger.info("Running evaluation for session %s with metrics: %s", session_id, request.metrics)
-                eval_result = await run_evaluation(config)
-                logger.info("Evaluation complete for session %s. Trace results: %d", session_id, len(eval_result.trace_results) if eval_result.trace_results else 0)
+                except Exception as exc:
+                    logger.error(f"Failed to evaluate session {session_id}: {exc}", exc_info=True)
+                    return {"sessionId": session_id, "error": str(exc)}
 
-                if eval_result.trace_results:
-                    trace_result = eval_result.trace_results[0]
-
-                    results.append({
-                        "sessionId": session_id,
-                        "traceId": trace_result.trace_id,
-                        "numInvocations": trace_result.num_invocations,
-                        "metricResults": [
-                            {
-                                "metricName": mr.metric_name,
-                                "score": mr.score,
-                                "evalStatus": mr.eval_status,
-                                "error": mr.error,
-                            }
-                            for mr in trace_result.metric_results
-                        ],
-                    })
-                    logger.info("Added result for session %s", session_id)
-                else:
-                    logger.warning("No trace results for session %s", session_id)
-
-            except Exception as exc:
-                logger.error(f"Failed to evaluate session {session_id}: {exc}", exc_info=True)
-                results.append({
-                    "sessionId": session_id,
-                    "error": str(exc),
-                })
+        results = await asyncio.gather(
+            *[eval_one_session(sid, sess) for sid, sess in sessions_to_evaluate]
+        )
 
         logger.info("Evaluation complete. Total results: %d", len(results))
 

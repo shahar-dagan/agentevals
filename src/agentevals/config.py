@@ -39,3 +39,13 @@ class EvalRunConfig(BaseModel):
         default="table",
         description="Output format: 'table', 'json', or 'summary'.",
     )
+
+    max_concurrent_traces: int = Field(
+        default=10,
+        description="Maximum number of traces to evaluate concurrently.",
+    )
+
+    max_concurrent_evals: int = Field(
+        default=5,
+        description="Maximum number of concurrent metric evaluations (LLM API calls).",
+    )

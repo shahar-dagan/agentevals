@@ -139,6 +139,16 @@ class TestRunner:
         assert len(data["traces"]) == 1
         assert data["traces"][0]["metrics"][0]["score"] == 1.0
 
+    def test_parallel_trace_error_isolation(self):
+        config = EvalRunConfig(
+            trace_files=[HELM_TRACE, "/nonexistent/file.json"],
+            eval_set_file=EVAL_SET,
+            metrics=["tool_trajectory_avg_score"],
+        )
+        result = asyncio.run(run_evaluation(config))
+        assert len(result.trace_results) >= 1
+        assert len(result.errors) >= 1
+
     def test_extract_trace_metadata_adk(self):
         from agentevals.loader.jaeger import JaegerJsonLoader
 
