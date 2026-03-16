@@ -464,14 +464,16 @@ class TestLateLogReextraction:
             mgr.schedule_log_reextraction.assert_called_once_with("s1")
         _run(go())
 
-    def test_late_logs_matched_by_session_name(self):
+    def test_late_logs_not_matched_to_completed_session_by_name(self):
+        """Logs with a new trace_id should not attach to a completed session
+        even if the session_name matches (the next run may reuse the name)."""
         async def go():
             mgr = _make_mgr()
             set_trace_manager(mgr)
             meta = {"eval_set_id": None, "session_name": "named-session", "resource_attrs": {}}
             session = await mgr.get_or_create_otlp_session("trace-abc", meta)
             session.is_complete = True
-            mgr.schedule_log_reextraction = MagicMock()
+            mgr.buffer_orphan_log = MagicMock()
 
             body = {
                 "resourceLogs": [{
@@ -489,9 +491,9 @@ class TestLateLogReextraction:
             }
             await _process_logs(body)
 
-            assert len(session.logs) == 1
-            assert "new-trace-id" in session.trace_ids
-            mgr.schedule_log_reextraction.assert_called_once()
+            assert len(session.logs) == 0
+            assert "new-trace-id" not in session.trace_ids
+            mgr.buffer_orphan_log.assert_called_once()
         _run(go())
 
 

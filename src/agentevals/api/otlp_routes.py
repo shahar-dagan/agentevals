@@ -179,7 +179,7 @@ async def _process_logs(body: dict) -> None:
 
                 if not session and session_name and _trace_manager:
                     candidate = _trace_manager.sessions.get(session_name)
-                    if candidate:
+                    if candidate and not candidate.is_complete:
                         candidate.trace_ids.add(trace_id)
                         session = candidate
 
