@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { css } from '@emotion/react';
 import { Button, message } from 'antd';
 import { Copy } from 'lucide-react';
@@ -9,9 +9,25 @@ interface RawJsonPreviewProps {
   title?: string;
 }
 
+function prettifyJson(content: string): string {
+  try {
+    return JSON.stringify(JSON.parse(content), null, 2);
+  } catch {
+    const lines = content.split('\n').filter(l => l.trim());
+    if (lines.length <= 1) return content;
+    try {
+      return lines.map(line => JSON.stringify(JSON.parse(line), null, 2)).join('\n\n');
+    } catch {
+      return content;
+    }
+  }
+}
+
 export const RawJsonPreview: React.FC<RawJsonPreviewProps> = ({ content, title = 'JSON Preview' }) => {
+  const prettified = useMemo(() => prettifyJson(content), [content]);
+
   const handleCopy = async () => {
-    const success = await copyToClipboard(content);
+    const success = await copyToClipboard(prettified);
     if (success) {
       message.success('Copied to clipboard!');
     } else {
@@ -33,7 +49,7 @@ export const RawJsonPreview: React.FC<RawJsonPreviewProps> = ({ content, title =
       </div>
 
       <div css={jsonContainerStyle}>
-        <pre>{content}</pre>
+        <pre>{prettified}</pre>
       </div>
     </div>
   );
@@ -71,7 +87,5 @@ const jsonContainerStyle = css`
     font-family: monospace;
     color: var(--text-primary);
     line-height: 1.5;
-    white-space: pre-wrap;
-    word-break: break-all;
   }
 `;
