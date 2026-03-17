@@ -17,6 +17,15 @@ from ..runner import run_evaluation
 from ..config import EvalRunConfig
 from ..trace_attrs import OTEL_GENAI_INPUT_MESSAGES, OTEL_GENAI_REQUEST_MODEL
 from ..utils.log_enrichment import enrich_spans_with_logs
+from .models import (
+    StandardResponse,
+    SessionInfo,
+    CreateEvalSetData,
+    EvaluateSessionsData,
+    SessionEvalResult,
+    PrepareEvaluationData,
+    GetTraceData,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,29 +61,27 @@ class GetTraceRequest(BaseModel):
     session_id: str
 
 
-@streaming_router.get("/sessions")
+@streaming_router.get("/sessions", response_model=StandardResponse[list[SessionInfo]])
 async def list_sessions():
-    """Get all active and completed sessions."""
     sessions_data = []
 
     for session_id, session in trace_manager.sessions.items():
-        entry: dict = {
-            "sessionId": session_id,
-            "traceId": session.trace_id,
-            "evalSetId": session.eval_set_id,
-            "spanCount": len(session.spans),
-            "isComplete": session.is_complete,
-            "startedAt": session.started_at.isoformat(),
-            "metadata": session.metadata,
-        }
-        if session.is_complete and session.invocations:
-            entry["invocations"] = session.invocations
-        sessions_data.append(entry)
+        info = SessionInfo(
+            session_id=session_id,
+            trace_id=session.trace_id,
+            eval_set_id=session.eval_set_id,
+            span_count=len(session.spans),
+            is_complete=session.is_complete,
+            started_at=session.started_at.isoformat(),
+            metadata=session.metadata,
+            invocations=session.invocations if session.is_complete and session.invocations else None,
+        )
+        sessions_data.append(info)
 
-    return sessions_data
+    return StandardResponse(data=sessions_data)
 
 
-@streaming_router.post("/create-eval-set")
+@streaming_router.post("/create-eval-set", response_model=StandardResponse[CreateEvalSetData])
 async def create_eval_set_from_session(request: CreateEvalSetRequest):
     """Convert a session's trace into an EvalSet."""
     session = trace_manager.sessions.get(request.session_id)
@@ -136,10 +143,10 @@ async def create_eval_set_from_session(request: CreateEvalSetRequest):
             ]
         }
 
-        return {
-            "eval_set": eval_set,
-            "num_invocations": len(all_invocations),
-        }
+        return StandardResponse(data=CreateEvalSetData(
+            eval_set=eval_set,
+            num_invocations=len(all_invocations),
+        ))
 
     except HTTPException:
         raise
@@ -148,7 +155,7 @@ async def create_eval_set_from_session(request: CreateEvalSetRequest):
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@streaming_router.post("/evaluate-sessions")
+@streaming_router.post("/evaluate-sessions", response_model=StandardResponse[EvaluateSessionsData])
 async def evaluate_sessions(request: EvaluateSessionsRequest):
     """Evaluate all sessions against a golden session converted to EvalSet."""
     golden_session = trace_manager.sessions.get(request.golden_session_id)
@@ -165,7 +172,7 @@ async def evaluate_sessions(request: EvaluateSessionsRequest):
 
         import tempfile
         eval_set_file = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
-        json.dump(eval_set_response["eval_set"], eval_set_file)
+        json.dump(eval_set_response.data.eval_set, eval_set_file)
         eval_set_file.close()
 
         sessions_to_evaluate = [
@@ -178,7 +185,7 @@ async def evaluate_sessions(request: EvaluateSessionsRequest):
 
         sem = asyncio.Semaphore(5)
 
-        async def eval_one_session(session_id: str, session) -> dict:
+        async def eval_one_session(session_id: str, session) -> SessionEvalResult:
             async with sem:
                 try:
                     trace_file = await trace_manager._save_spans_to_temp_file(session)
@@ -195,11 +202,11 @@ async def evaluate_sessions(request: EvaluateSessionsRequest):
 
                     if eval_result.trace_results:
                         trace_result = eval_result.trace_results[0]
-                        return {
-                            "sessionId": session_id,
-                            "traceId": trace_result.trace_id,
-                            "numInvocations": trace_result.num_invocations,
-                            "metricResults": [
+                        return SessionEvalResult(
+                            session_id=session_id,
+                            trace_id=trace_result.trace_id,
+                            num_invocations=trace_result.num_invocations,
+                            metric_results=[
                                 {
                                     "metricName": mr.metric_name,
                                     "score": mr.score,
@@ -208,14 +215,14 @@ async def evaluate_sessions(request: EvaluateSessionsRequest):
                                 }
                                 for mr in trace_result.metric_results
                             ],
-                        }
+                        )
                     else:
                         logger.warning("No trace results for session %s", session_id)
-                        return {"sessionId": session_id, "error": "No trace results"}
+                        return SessionEvalResult(session_id=session_id, error="No trace results")
 
                 except Exception as exc:
                     logger.error(f"Failed to evaluate session {session_id}: {exc}", exc_info=True)
-                    return {"sessionId": session_id, "error": str(exc)}
+                    return SessionEvalResult(session_id=session_id, error=str(exc))
 
         results = await asyncio.gather(
             *[eval_one_session(sid, sess) for sid, sess in sessions_to_evaluate]
@@ -223,11 +230,11 @@ async def evaluate_sessions(request: EvaluateSessionsRequest):
 
         logger.info("Evaluation complete. Total results: %d", len(results))
 
-        return {
-            "goldenSessionId": request.golden_session_id,
-            "evalSetId": request.eval_set_id,
-            "results": results,
-        }
+        return StandardResponse(data=EvaluateSessionsData(
+            golden_session_id=request.golden_session_id,
+            eval_set_id=request.eval_set_id,
+            results=results,
+        ))
 
     except HTTPException:
         raise
@@ -236,7 +243,7 @@ async def evaluate_sessions(request: EvaluateSessionsRequest):
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@streaming_router.post("/prepare-evaluation")
+@streaming_router.post("/prepare-evaluation", response_model=StandardResponse[PrepareEvaluationData])
 async def prepare_evaluation(request: PrepareEvaluationRequest):
     """Prepare evaluation by saving traces and eval set as downloadable files."""
     golden_session = trace_manager.sessions.get(request.golden_session_id)
@@ -258,7 +265,7 @@ async def prepare_evaluation(request: PrepareEvaluationRequest):
 
         eval_set_file = os.path.join(temp_dir, f"eval_set_{request.golden_session_id}.json")
         with open(eval_set_file, 'w') as f:
-            json.dump(eval_set_response["eval_set"], f)
+            json.dump(eval_set_response.data.eval_set, f)
 
         trace_files = []
         for session_id in request.session_ids:
@@ -272,14 +279,14 @@ async def prepare_evaluation(request: PrepareEvaluationRequest):
                 "file_path": str(trace_file),
             })
 
-        return {
-            "eval_set_url": f"http://localhost:8001/api/streaming/download/{os.path.basename(eval_set_file)}",
-            "trace_urls": [
+        return StandardResponse(data=PrepareEvaluationData(
+            eval_set_url=f"http://localhost:8001/api/streaming/download/{os.path.basename(eval_set_file)}",
+            trace_urls=[
                 f"http://localhost:8001/api/streaming/download/{os.path.basename(tf['file_path'])}"
                 for tf in trace_files
             ],
-            "num_traces": len(trace_files),
-        }
+            num_traces=len(trace_files),
+        ))
 
     except HTTPException:
         raise
@@ -308,9 +315,8 @@ async def download_file(filename: str):
 
 
 
-@streaming_router.post("/get-trace")
+@streaming_router.post("/get-trace", response_model=StandardResponse[GetTraceData])
 async def get_trace(request: GetTraceRequest):
-    """Get the OTLP JSONL trace content for a session."""
     session = trace_manager.sessions.get(request.session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -350,11 +356,11 @@ async def get_trace(request: GetTraceRequest):
         with open(temp_file.name, 'r') as f:
             trace_content = f.read()
 
-        return {
-            "session_id": request.session_id,
-            "trace_content": trace_content,
-            "num_spans": len(enriched_spans),
-        }
+        return StandardResponse(data=GetTraceData(
+            session_id=request.session_id,
+            trace_content=trace_content,
+            num_spans=len(enriched_spans),
+        ))
 
     except Exception as exc:
         logger.exception("Failed to get trace")

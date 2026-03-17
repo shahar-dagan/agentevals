@@ -7,9 +7,11 @@ import inspect
 import json
 import logging
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
+
+from pydantic import BaseModel, ConfigDict, Field
+from pydantic.alias_generators import to_camel
 
 from google.adk.evaluation.eval_case import EvalCase, Invocation, get_all_tool_calls
 from google.adk.evaluation.eval_metrics import (
@@ -61,29 +63,32 @@ _METRICS_NEEDING_LLM = {
 }
 
 
-@dataclass
-class MetricResult:
+class MetricResult(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
     metric_name: str
     score: float | None = None
     eval_status: str = "NOT_EVALUATED"
-    per_invocation_scores: list[float | None] = field(default_factory=list)
+    per_invocation_scores: list[float | None] = Field(default_factory=list)
     error: str | None = None
-    details: dict[str, Any] | None = None  # Additional details (e.g., expected vs actual)
+    details: dict[str, Any] | None = None
 
 
-@dataclass
-class TraceResult:
+class TraceResult(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
     trace_id: str
     num_invocations: int = 0
-    metric_results: list[MetricResult] = field(default_factory=list)
-    conversion_warnings: list[str] = field(default_factory=list)
+    metric_results: list[MetricResult] = Field(default_factory=list)
+    conversion_warnings: list[str] = Field(default_factory=list)
     performance_metrics: dict[str, Any] | None = None
 
 
-@dataclass
-class RunResult:
-    trace_results: list[TraceResult] = field(default_factory=list)
-    errors: list[str] = field(default_factory=list)
+class RunResult(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    trace_results: list[TraceResult] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
     performance_metrics: dict[str, Any] | None = None
 
 

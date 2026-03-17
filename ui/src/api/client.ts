@@ -1,40 +1,20 @@
-import type { RunResult, EvalConfig, TraceResult } from '../lib/types';
+import type { RunResult, EvalConfig, TraceResult, StandardResponse } from '../lib/types';
 import { config } from '../config';
 
 const API_BASE_URL = `${config.api.baseUrl}/api`;
 
-/**
- * Convert snake_case Python response to camelCase TypeScript types
- */
-function convertSnakeToCamel(obj: any): any {
-  if (Array.isArray(obj)) {
-    return obj.map(convertSnakeToCamel);
+async function unwrap<T>(response: Response): Promise<T> {
+  const json: StandardResponse<T> = await response.json();
+  if (json.error) {
+    throw new Error(json.error);
   }
-
-  if (obj !== null && typeof obj === 'object') {
-    const converted: any = {};
-    for (const [key, value] of Object.entries(obj)) {
-      const camelKey = key.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
-      converted[camelKey] = convertSnakeToCamel(value);
-    }
-    return converted;
-  }
-
-  return obj;
+  return json.data;
 }
 
-/**
- * Evaluate traces using the Python backend API
- *
- * @param traceFiles - Array of trace files (Jaeger JSON)
- * @param evalSetFile - Optional eval set file
- * @param config - Evaluation configuration
- * @returns RunResult with trace results and errors
- */
 export async function evaluateTracesAPI(
   traceFiles: File[],
   evalSetFile: File | null,
-  config: EvalConfig
+  evalConfig: EvalConfig
 ): Promise<RunResult> {
   const formData = new FormData();
 
@@ -46,7 +26,7 @@ export async function evaluateTracesAPI(
     formData.append('eval_set_file', evalSetFile);
   }
 
-  formData.append('config', JSON.stringify(config));
+  formData.append('config', JSON.stringify(evalConfig));
 
   try {
     const response = await fetch(`${API_BASE_URL}/evaluate`, {
@@ -67,10 +47,7 @@ export async function evaluateTracesAPI(
       throw new Error(errorMessage);
     }
 
-    const data = await response.json();
-    const converted = convertSnakeToCamel(data) as RunResult;
-
-    return converted;
+    return unwrap<RunResult>(response);
 
   } catch (error) {
     if (error instanceof Error) {
@@ -80,13 +57,10 @@ export async function evaluateTracesAPI(
   }
 }
 
-/**
- * Evaluate traces with real-time progress via SSE
- */
 export async function evaluateTracesStreaming(
   traceFiles: File[],
   evalSetFile: File | null,
-  config: EvalConfig,
+  evalConfig: EvalConfig,
   onProgress: (message: string) => void,
   onTraceProgress: (traceId: string, status: string, partialResult?: TraceResult) => void,
   onComplete: (result: RunResult) => void,
@@ -102,7 +76,7 @@ export async function evaluateTracesStreaming(
     formData.append('eval_set_file', evalSetFile);
   }
 
-  formData.append('config', JSON.stringify(config));
+  formData.append('config', JSON.stringify(evalConfig));
 
   try {
     const response = await fetch(`${API_BASE_URL}/evaluate/stream`, {
@@ -136,15 +110,13 @@ export async function evaluateTracesStreaming(
           const eventData = JSON.parse(line.slice(6));
 
           if (eventType === 'performance_metrics') {
-            const tm = eventData.traceMetadata
-              ? convertSnakeToCamel(eventData.traceMetadata) as Record<string, any>
-              : {};
+            const tm = eventData.traceMetadata ?? {};
             const partialResult: TraceResult = {
               traceId: eventData.traceId,
               numInvocations: 0,
               metricResults: [],
               conversionWarnings: [],
-              performanceMetrics: convertSnakeToCamel(eventData.performanceMetrics),
+              performanceMetrics: eventData.performanceMetrics,
               agentName: tm.agentName,
               model: tm.model,
               startTime: tm.startTime,
@@ -157,14 +129,11 @@ export async function evaluateTracesStreaming(
             onError(new Error(eventData.error));
             return;
           } else if (eventData.done) {
-            const converted = convertSnakeToCamel(eventData.result) as RunResult;
-            onComplete(converted);
+            onComplete(eventData.result as RunResult);
             return;
           } else if (eventData.traceProgress) {
             const tp = eventData.traceProgress;
-            const partialResult = tp.partialResult
-              ? convertSnakeToCamel(tp.partialResult) as TraceResult
-              : undefined;
+            const partialResult = tp.partialResult as TraceResult | undefined;
             onTraceProgress(tp.traceId, tp.status || '', partialResult);
           } else if (eventData.message) {
             onProgress(eventData.message);
@@ -181,9 +150,6 @@ export async function evaluateTracesStreaming(
   }
 }
 
-/**
- * List available metrics from the backend
- */
 export async function listMetrics() {
   try {
     const response = await fetch(`${API_BASE_URL}/metrics`);
@@ -192,16 +158,13 @@ export async function listMetrics() {
       throw new Error(`Failed to fetch metrics: ${response.statusText}`);
     }
 
-    return await response.json();
+    return unwrap(response);
   } catch (error) {
     console.error('Failed to list metrics:', error);
     throw error;
   }
 }
 
-/**
- * Validate an eval set file
- */
 export async function validateEvalSet(evalSetFile: File) {
   const formData = new FormData();
   formData.append('eval_set_file', evalSetFile);
@@ -216,7 +179,7 @@ export async function validateEvalSet(evalSetFile: File) {
       throw new Error(`Failed to validate eval set: ${response.statusText}`);
     }
 
-    return await response.json();
+    return unwrap(response);
   } catch (error) {
     console.error('Failed to validate eval set:', error);
     throw error;
@@ -228,12 +191,9 @@ export async function getConfig(): Promise<{ apiKeys: { google: boolean; anthrop
   if (!response.ok) {
     throw new Error(`Failed to fetch config: ${response.statusText}`);
   }
-  return response.json();
+  return unwrap(response);
 }
 
-/**
- * Health check
- */
 export async function generateBugReport(diagnostics: {
   user_description: string;
   browser_info: Record<string, unknown>;
@@ -265,7 +225,7 @@ export async function generateBugReport(diagnostics: {
 
 export async function loadBugReport(
   file: File,
-): Promise<{ loaded_sessions: string[]; count: number }> {
+): Promise<{ loadedSessions: string[]; count: number }> {
   const formData = new FormData();
   formData.append('file', file);
 
@@ -287,7 +247,7 @@ export async function loadBugReport(
     throw new Error(errorMessage);
   }
 
-  return response.json();
+  return unwrap(response);
 }
 
 export async function healthCheck() {
@@ -298,7 +258,7 @@ export async function healthCheck() {
       throw new Error(`Health check failed: ${response.statusText}`);
     }
 
-    return await response.json();
+    return unwrap(response);
   } catch (error) {
     console.error('Health check failed:', error);
     throw error;

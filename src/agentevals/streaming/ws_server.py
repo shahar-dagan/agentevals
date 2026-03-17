@@ -20,6 +20,12 @@ from ..loader.base import Trace
 from ..loader.otlp import OtlpJsonLoader
 from ..trace_attrs import OTEL_GENAI_INPUT_MESSAGES, OTEL_GENAI_REQUEST_MODEL
 from ..utils.log_enrichment import enrich_spans_with_logs
+from ..api.models import (
+    WSSessionStartedEvent,
+    WSSessionCompleteEvent,
+    WSSpanReceivedEvent,
+    SessionInfo,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -243,16 +249,17 @@ class StreamingTraceManager:
                     update["sessionId"] = session_id
                     await self.broadcast_to_ui(update)
 
-        await self.broadcast_to_ui({
-            "type": "session_started",
-            "session": {
-                "sessionId": session_id,
-                "traceId": trace_id,
-                "evalSetId": metadata.get("eval_set_id"),
-                "metadata": session.metadata,
-                "startedAt": session.started_at.isoformat(),
-            },
-        })
+        await self.broadcast_to_ui(WSSessionStartedEvent(
+            session=SessionInfo(
+                session_id=session_id,
+                trace_id=trace_id,
+                eval_set_id=metadata.get("eval_set_id"),
+                span_count=0,
+                is_complete=False,
+                started_at=session.started_at.isoformat(),
+                metadata=session.metadata,
+            ),
+        ).model_dump(by_alias=True))
 
         logger.info("Auto-created OTLP session: %s (trace: %s)", session_id, trace_id)
         return session
@@ -337,11 +344,10 @@ class StreamingTraceManager:
         invocations_data = await self._extract_invocations(session)
         session.invocations = invocations_data
 
-        await self.broadcast_to_ui({
-            "type": "session_complete",
-            "sessionId": session_id,
-            "invocations": invocations_data,
-        })
+        await self.broadcast_to_ui(WSSessionCompleteEvent(
+            session_id=session_id,
+            invocations=invocations_data,
+        ).model_dump(by_alias=True))
 
     async def _complete_otlp_session(self, session_id: str) -> None:
         """Mark an OTLP session as complete and extract invocations.
@@ -373,11 +379,10 @@ class StreamingTraceManager:
         invocations_data = await self._extract_invocations(session)
         session.invocations = invocations_data
 
-        await self.broadcast_to_ui({
-            "type": "session_complete",
-            "sessionId": session_id,
-            "invocations": invocations_data,
-        })
+        await self.broadcast_to_ui(WSSessionCompleteEvent(
+            session_id=session_id,
+            invocations=invocations_data,
+        ).model_dump(by_alias=True))
 
         if session_id in self.incremental_extractors:
             del self.incremental_extractors[session_id]
@@ -411,16 +416,17 @@ class StreamingTraceManager:
                     self.sessions[session_id] = session
                     self.incremental_extractors[session_id] = IncrementalInvocationExtractor()
 
-                    broadcast_event = {
-                        "type": "session_started",
-                        "session": {
-                            "sessionId": session_id,
-                            "traceId": event["trace_id"],
-                            "evalSetId": event.get("eval_set_id"),
-                            "metadata": event.get("metadata", {}),
-                            "startedAt": session.started_at.isoformat(),
-                        },
-                    }
+                    broadcast_event = WSSessionStartedEvent(
+                        session=SessionInfo(
+                            session_id=session_id,
+                            trace_id=event["trace_id"],
+                            eval_set_id=event.get("eval_set_id"),
+                            span_count=0,
+                            is_complete=False,
+                            started_at=session.started_at.isoformat(),
+                            metadata=event.get("metadata", {}),
+                        ),
+                    ).model_dump(by_alias=True)
                     logger.info("Broadcasting session_started to %d SSE clients", len(self.sse_queues))
                     await self.broadcast_to_ui(broadcast_event)
 
@@ -456,13 +462,10 @@ class StreamingTraceManager:
                             update["sessionId"] = sid
                             await self.broadcast_to_ui(update)
 
-                    await self.broadcast_to_ui(
-                        {
-                            "type": "span_received",
-                            "sessionId": sid,
-                            "span": event["span"],
-                        }
-                    )
+                    await self.broadcast_to_ui(WSSpanReceivedEvent(
+                        session_id=sid,
+                        span=event["span"],
+                    ).model_dump(by_alias=True))
 
                 elif event["type"] == "log":
                     sid = event["session_id"]
@@ -511,11 +514,10 @@ class StreamingTraceManager:
                     invocations_data = await self._extract_invocations(session)
                     session.invocations = invocations_data
 
-                    complete_event = {
-                        "type": "session_complete",
-                        "sessionId": sid,
-                        "invocations": invocations_data,
-                    }
+                    complete_event = WSSessionCompleteEvent(
+                        session_id=sid,
+                        invocations=invocations_data,
+                    ).model_dump(by_alias=True)
                     logger.info("Broadcasting session_complete to %d SSE clients", len(self.sse_queues))
                     await self.broadcast_to_ui(complete_event)
 

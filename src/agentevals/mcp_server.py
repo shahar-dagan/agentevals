@@ -18,12 +18,17 @@ def create_server(server_url: str | None = None) -> FastMCP:
     mcp = FastMCP("agentevals")
     _url = (server_url or os.environ.get("AGENTEVALS_SERVER_URL", _DEFAULT_SERVER_URL)).rstrip("/")
 
+    def _unwrap(response_json: dict) -> Any:
+        if response_json.get("error"):
+            raise RuntimeError(f"API error: {response_json['error']}")
+        return response_json["data"]
+
     async def _get(path: str) -> Any:
         try:
             async with httpx.AsyncClient(timeout=30) as client:
                 r = await client.get(f"{_url}{path}")
                 r.raise_for_status()
-                return r.json()
+                return _unwrap(r.json())
         except httpx.ConnectError:
             raise RuntimeError(
                 f"Cannot reach agentevals server at {_url}. "
@@ -37,7 +42,7 @@ def create_server(server_url: str | None = None) -> FastMCP:
             async with httpx.AsyncClient(timeout=60) as client:
                 r = await client.post(f"{_url}{path}", json=body)
                 r.raise_for_status()
-                return r.json()
+                return _unwrap(r.json())
         except httpx.ConnectError:
             raise RuntimeError(
                 f"Cannot reach agentevals server at {_url}. "
@@ -147,12 +152,12 @@ def create_server(server_url: str | None = None) -> FastMCP:
         raw = await _post("/api/streaming/get-trace", {"session_id": session_id})
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
-            f.write(raw["trace_content"])
+            f.write(raw["traceContent"])
             tmp_path = f.name
 
         traces = OtlpJsonLoader().load(tmp_path)
         if not traces:
-            return {"session_id": session_id, "num_spans": raw["num_spans"], "invocations": []}
+            return {"session_id": session_id, "num_spans": raw["numSpans"], "invocations": []}
 
         invocations = []
         for conv in convert_traces(traces):
@@ -171,7 +176,7 @@ def create_server(server_url: str | None = None) -> FastMCP:
 
         return {
             "session_id": session_id,
-            "num_spans": raw["num_spans"],
+            "num_spans": raw["numSpans"],
             "num_invocations": len(invocations),
             "invocations": invocations,
         }

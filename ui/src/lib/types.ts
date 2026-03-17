@@ -1,3 +1,9 @@
+// API envelope
+export interface StandardResponse<T> {
+  data: T;
+  error: string | null;
+}
+
 // Core trace data structures
 export interface Log {
   timestamp: number;

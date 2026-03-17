@@ -8,45 +8,63 @@ import logging
 import os
 import shutil
 import tempfile
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
+from pydantic.alias_generators import to_camel
 
 from agentevals import __version__
 from ..config import EvalRunConfig
 from ..extraction import get_extractor
 from ..runner import RunResult, load_eval_set, run_evaluation, _extract_performance_metrics, _extract_trace_metadata, get_loader
+from .models import (
+    StandardResponse,
+    HealthData,
+    ConfigData,
+    ApiKeyStatus,
+    MetricInfo,
+    EvalSetValidation,
+    SSEProgressEvent,
+    SSETraceProgressEvent,
+    SSETraceProgress,
+    SSEPerformanceMetricsEvent,
+    SSEDoneEvent,
+    SSEErrorEvent,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _camel_keys(obj: Any) -> Any:
+    """Recursively convert dict keys from snake_case to camelCase."""
+    if isinstance(obj, dict):
+        return {to_camel(k): _camel_keys(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_camel_keys(item) for item in obj]
+    return obj
 
 router = APIRouter()
 
 
-@router.get("/health")
+@router.get("/health", response_model=StandardResponse[HealthData])
 async def health_check():
-    """Health check endpoint."""
-    return {"status": "ok", "version": __version__}
+    return StandardResponse(data=HealthData(status="ok", version=__version__))
 
 
-@router.get("/config")
+@router.get("/config", response_model=StandardResponse[ConfigData])
 async def get_config():
-    """Return environment configuration, including which API keys are available."""
-    return {
-        "apiKeys": {
-            "google": bool(os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")),
-            "anthropic": bool(os.environ.get("ANTHROPIC_API_KEY")),
-            "openai": bool(os.environ.get("OPENAI_API_KEY")),
-        }
-    }
+    return StandardResponse(data=ConfigData(
+        api_keys=ApiKeyStatus(
+            google=bool(os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")),
+            anthropic=bool(os.environ.get("ANTHROPIC_API_KEY")),
+            openai=bool(os.environ.get("OPENAI_API_KEY")),
+        )
+    ))
 
 
-@router.get("/metrics")
+@router.get("/metrics", response_model=StandardResponse[list[MetricInfo]])
 async def list_metrics():
-    """List available metrics with metadata.
-
-    Dynamically loads metrics from ADK registry and adds agentevals metadata.
-    """
     from ..runner import _METRICS_NEEDING_EXPECTED, _METRICS_NEEDING_LLM
 
     _METRICS_NEEDING_GCP = {
@@ -84,109 +102,37 @@ async def list_metrics():
             if m.metric_name == "per_turn_user_simulator_quality_v1":
                 continue
 
-            metrics.append({
-                "name": m.metric_name,
-                "category": _METRIC_CATEGORIES.get(m.metric_name, "other"),
-                "requiresEvalSet": m.metric_name in _METRICS_NEEDING_EXPECTED,
-                "requiresLLM": m.metric_name in _METRICS_NEEDING_LLM,
-                "requiresGCP": m.metric_name in _METRICS_NEEDING_GCP,
-                "requiresRubrics": m.metric_name in _METRICS_NEEDING_RUBRICS,
-                "description": m.description or "No description available",
-                "working": m.metric_name not in _METRICS_NEEDING_RUBRICS,
-            })
+            metrics.append(MetricInfo(
+                name=m.metric_name,
+                category=_METRIC_CATEGORIES.get(m.metric_name, "other"),
+                requires_eval_set=m.metric_name in _METRICS_NEEDING_EXPECTED,
+                requires_llm=m.metric_name in _METRICS_NEEDING_LLM,
+                requires_gcp=m.metric_name in _METRICS_NEEDING_GCP,
+                requires_rubrics=m.metric_name in _METRICS_NEEDING_RUBRICS,
+                description=m.description or "No description available",
+                working=m.metric_name not in _METRICS_NEEDING_RUBRICS,
+            ))
 
-        return metrics
+        return StandardResponse(data=metrics)
 
     except ImportError:
-        return [
-            {
-                "name": "tool_trajectory_avg_score",
-                "category": "trajectory",
-                "requiresEvalSet": True,
-                "requiresLLM": False,
-                "requiresGCP": False,
-                "requiresRubrics": False,
-                "working": True,
-                "description": "Compare tool call sequences against expected trajectory",
-            },
-            {
-                "name": "response_match_score",
-                "category": "response",
-                "requiresEvalSet": True,
-                "requiresLLM": False,
-                "requiresGCP": False,
-                "requiresRubrics": False,
-                "working": True,
-                "description": "Text similarity between actual and expected responses using ROUGE-1",
-            },
-            {
-                "name": "response_evaluation_score",
-                "category": "response",
-                "requiresEvalSet": True,
-                "requiresLLM": False,
-                "requiresGCP": True,
-                "requiresRubrics": False,
-                "working": True,
-                "description": "Semantic evaluation of response quality using Vertex AI",
-            },
-            {
-                "name": "final_response_match_v2",
-                "category": "response",
-                "requiresEvalSet": True,
-                "requiresLLM": True,
-                "requiresGCP": False,
-                "requiresRubrics": False,
-                "working": True,
-                "description": "LLM-based comparison of final responses",
-            },
-            {
-                "name": "hallucinations_v1",
-                "category": "safety",
-                "requiresEvalSet": False,
-                "requiresLLM": True,
-                "requiresGCP": False,
-                "requiresRubrics": False,
-                "working": True,
-                "description": "Detect hallucinated information in responses",
-            },
-            {
-                "name": "safety_v1",
-                "category": "safety",
-                "requiresEvalSet": False,
-                "requiresLLM": False,
-                "requiresGCP": True,
-                "requiresRubrics": False,
-                "working": True,
-                "description": "Safety and security assessment using Vertex AI",
-            },
-            {
-                "name": "rubric_based_final_response_quality_v1",
-                "category": "quality",
-                "requiresEvalSet": False,
-                "requiresLLM": True,
-                "requiresGCP": False,
-                "requiresRubrics": True,
-                "working": False,
-                "description": "Rubric-based quality assessment of responses (requires rubrics config)",
-            },
-            {
-                "name": "rubric_based_tool_use_quality_v1",
-                "category": "quality",
-                "requiresEvalSet": False,
-                "requiresLLM": True,
-                "requiresGCP": False,
-                "requiresRubrics": True,
-                "working": False,
-                "description": "Rubric-based assessment of tool usage quality (requires rubrics config)",
-            },
+        fallback = [
+            MetricInfo(name="tool_trajectory_avg_score", category="trajectory", requires_eval_set=True, requires_llm=False, requires_gcp=False, requires_rubrics=False, working=True, description="Compare tool call sequences against expected trajectory"),
+            MetricInfo(name="response_match_score", category="response", requires_eval_set=True, requires_llm=False, requires_gcp=False, requires_rubrics=False, working=True, description="Text similarity between actual and expected responses using ROUGE-1"),
+            MetricInfo(name="response_evaluation_score", category="response", requires_eval_set=True, requires_llm=False, requires_gcp=True, requires_rubrics=False, working=True, description="Semantic evaluation of response quality using Vertex AI"),
+            MetricInfo(name="final_response_match_v2", category="response", requires_eval_set=True, requires_llm=True, requires_gcp=False, requires_rubrics=False, working=True, description="LLM-based comparison of final responses"),
+            MetricInfo(name="hallucinations_v1", category="safety", requires_eval_set=False, requires_llm=True, requires_gcp=False, requires_rubrics=False, working=True, description="Detect hallucinated information in responses"),
+            MetricInfo(name="safety_v1", category="safety", requires_eval_set=False, requires_llm=False, requires_gcp=True, requires_rubrics=False, working=True, description="Safety and security assessment using Vertex AI"),
+            MetricInfo(name="rubric_based_final_response_quality_v1", category="quality", requires_eval_set=False, requires_llm=True, requires_gcp=False, requires_rubrics=True, working=False, description="Rubric-based quality assessment of responses (requires rubrics config)"),
+            MetricInfo(name="rubric_based_tool_use_quality_v1", category="quality", requires_eval_set=False, requires_llm=True, requires_gcp=False, requires_rubrics=True, working=False, description="Rubric-based assessment of tool usage quality (requires rubrics config)"),
         ]
+        return StandardResponse(data=fallback)
 
 
-@router.post("/validate/eval-set")
+@router.post("/validate/eval-set", response_model=StandardResponse[EvalSetValidation])
 async def validate_eval_set(
     eval_set_file: UploadFile = File(...),
 ):
-    """Validate an eval set file structure."""
     temp_dir = tempfile.mkdtemp()
     try:
         eval_set_path = os.path.join(temp_dir, eval_set_file.filename or "eval_set.json")
@@ -196,23 +142,22 @@ async def validate_eval_set(
 
         try:
             eval_set = load_eval_set(eval_set_path)
-            return {
-                "valid": True,
-                "eval_set_id": eval_set.eval_set_id,
-                "num_cases": len(eval_set.eval_cases),
-                "errors": [],
-            }
+            return StandardResponse(data=EvalSetValidation(
+                valid=True,
+                eval_set_id=eval_set.eval_set_id,
+                num_cases=len(eval_set.eval_cases),
+            ))
         except Exception as exc:
-            return {
-                "valid": False,
-                "errors": [str(exc)],
-            }
+            return StandardResponse(data=EvalSetValidation(
+                valid=False,
+                errors=[str(exc)],
+            ))
 
     finally:
         shutil.rmtree(temp_dir)
 
 
-@router.post("/evaluate", response_model=RunResult)
+@router.post("/evaluate", response_model=StandardResponse[RunResult])
 async def evaluate_traces(
     trace_files: list[UploadFile] = File(...),
     config: str = Form(...),
@@ -318,7 +263,8 @@ async def evaluate_traces(
         logger.info(f"Evaluating {len(trace_paths)} trace file(s) with metrics: {metrics}")
         result = await run_evaluation(eval_config)
 
-        return result
+        result_dict = _camel_keys(result.model_dump(by_alias=True))
+        return StandardResponse(data=result_dict)
 
     except HTTPException:
         raise
@@ -344,7 +290,7 @@ async def evaluate_traces_stream(
             try:
                 config_dict = json.loads(config)
             except json.JSONDecodeError as exc:
-                yield f"data: {json.dumps({'error': f'Invalid config JSON: {exc}'})}\n\n"
+                yield f"data: {SSEErrorEvent(error=f'Invalid config JSON: {exc}').model_dump_json(by_alias=True)}\n\n"
                 return
 
             trace_paths = []
@@ -353,7 +299,7 @@ async def evaluate_traces_stream(
                     continue
 
                 if not (trace_file.filename.endswith(".json") or trace_file.filename.endswith(".jsonl")):
-                    yield f"data: {json.dumps({'error': f'Invalid file extension for {trace_file.filename}'})}\n\n"
+                    yield f"data: {SSEErrorEvent(error=f'Invalid file extension for {trace_file.filename}').model_dump_json(by_alias=True)}\n\n"
                     return
 
                 trace_path = os.path.join(temp_dir, trace_file.filename)
@@ -361,14 +307,14 @@ async def evaluate_traces_stream(
                     content = await trace_file.read()
 
                     if len(content) > 10 * 1024 * 1024:
-                        yield f"data: {json.dumps({'error': f'File {trace_file.filename} exceeds 10MB'})}\n\n"
+                        yield f"data: {SSEErrorEvent(error=f'File {trace_file.filename} exceeds 10MB').model_dump_json(by_alias=True)}\n\n"
                         return
 
                     f.write(content)
                 trace_paths.append(trace_path)
 
             if not trace_paths:
-                yield f"data: {json.dumps({'error': 'No valid trace files provided'})}\n\n"
+                yield f"data: {SSEErrorEvent(error='No valid trace files provided').model_dump_json(by_alias=True)}\n\n"
                 return
 
             trace_format = config_dict.get("trace_format")
@@ -382,25 +328,25 @@ async def evaluate_traces_stream(
             eval_set_path = None
             if eval_set_file and eval_set_file.filename:
                 if not eval_set_file.filename.endswith(".json"):
-                    yield f"data: {json.dumps({'error': 'Invalid file extension for eval set'})}\n\n"
+                    yield f"data: {SSEErrorEvent(error='Invalid file extension for eval set').model_dump_json(by_alias=True)}\n\n"
                     return
 
                 eval_set_path = os.path.join(temp_dir, eval_set_file.filename)
                 with open(eval_set_path, "wb") as f:
                     content = await eval_set_file.read()
                     if len(content) > 10 * 1024 * 1024:
-                        yield f"data: {json.dumps({'error': 'Eval set file exceeds 10MB'})}\n\n"
+                        yield f"data: {SSEErrorEvent(error='Eval set file exceeds 10MB').model_dump_json(by_alias=True)}\n\n"
                         return
                     f.write(content)
 
             metrics = config_dict.get("metrics", ["tool_trajectory_avg_score"])
             if not metrics or not isinstance(metrics, list):
-                yield f"data: {json.dumps({'error': 'Config must include metrics as a non-empty array'})}\n\n"
+                yield f"data: {SSEErrorEvent(error='Config must include metrics as a non-empty array').model_dump_json(by_alias=True)}\n\n"
                 return
 
             threshold = config_dict.get("threshold")
             if threshold is not None and (threshold < 0 or threshold > 1):
-                yield f"data: {json.dumps({'error': 'Threshold must be between 0 and 1'})}\n\n"
+                yield f"data: {SSEErrorEvent(error='Threshold must be between 0 and 1').model_dump_json(by_alias=True)}\n\n"
                 return
 
             eval_config = EvalRunConfig(
@@ -418,90 +364,53 @@ async def evaluate_traces_stream(
                     traces = loader.load(trace_file_path)
                     for trace in traces:
                         extractor = get_extractor(trace)
-                        perf_metrics = _extract_performance_metrics(trace, extractor)
-                        trace_metadata = _extract_trace_metadata(trace, extractor)
-                        event_data = {
-                            "traceId": trace.trace_id,
-                            "performanceMetrics": perf_metrics,
-                            "traceMetadata": trace_metadata,
-                        }
-                        yield f"event: performance_metrics\ndata: {json.dumps(event_data)}\n\n"
+                        perf_metrics = _camel_keys(_extract_performance_metrics(trace, extractor))
+                        trace_metadata = _camel_keys(_extract_trace_metadata(trace, extractor))
+                        evt = SSEPerformanceMetricsEvent(
+                            trace_id=trace.trace_id,
+                            performance_metrics=perf_metrics,
+                            trace_metadata=trace_metadata,
+                        )
+                        yield f"event: performance_metrics\ndata: {evt.model_dump_json(by_alias=True)}\n\n"
                 except Exception as e:
                     logger.error(f"Failed to extract early performance metrics from {trace_file_path}: {e}")
 
             queue: asyncio.Queue = asyncio.Queue()
 
             async def progress_callback(message: str):
-                await queue.put({"message": message})
+                await queue.put(("progress", message))
 
             async def trace_progress_callback(trace_result):
-                partial_result = {
-                    "traceId": trace_result.trace_id,
-                    "numInvocations": trace_result.num_invocations,
-                    "metricResults": [
-                        {
-                            "metricName": mr.metric_name,
-                            "score": mr.score,
-                            "evalStatus": mr.eval_status,
-                            "perInvocationScores": mr.per_invocation_scores,
-                            "error": mr.error,
-                            "details": mr.details,
-                        }
-                        for mr in trace_result.metric_results
-                    ],
-                    "conversionWarnings": trace_result.conversion_warnings,
-                    "performanceMetrics": trace_result.performance_metrics,
-                }
-                await queue.put({
-                    "traceProgress": {
-                        "traceId": trace_result.trace_id,
-                        "partialResult": partial_result,
-                    }
-                })
+                await queue.put(("trace_progress", trace_result))
 
             async def run_with_progress():
                 result = await run_evaluation(eval_config, progress_callback, trace_progress_callback)
-                await queue.put({"done": True, "result": result})
+                await queue.put(("done", result))
 
             eval_task = asyncio.create_task(run_with_progress())
 
             try:
                 while True:
-                    event = await queue.get()
+                    msg = await queue.get()
+                    tag, payload = msg
 
-                    if "done" in event:
-                        result = event["result"]
-                        final_event = {
-                            "done": True,
-                            "result": {
-                                "traceResults": [
-                                    {
-                                        "traceId": tr.trace_id,
-                                        "numInvocations": tr.num_invocations,
-                                        "metricResults": [
-                                            {
-                                                "metricName": mr.metric_name,
-                                                "score": mr.score,
-                                                "evalStatus": mr.eval_status,
-                                                "perInvocationScores": mr.per_invocation_scores,
-                                                "error": mr.error,
-                                                "details": mr.details,
-                                            }
-                                            for mr in tr.metric_results
-                                        ],
-                                        "conversionWarnings": tr.conversion_warnings,
-                                        "performanceMetrics": tr.performance_metrics,
-                                    }
-                                    for tr in result.trace_results
-                                ],
-                                "errors": result.errors,
-                                "performanceMetrics": result.performance_metrics,
-                            },
-                        }
-                        yield f"data: {json.dumps(final_event)}\n\n"
+                    if tag == "done":
+                        evt = SSEDoneEvent(
+                            result=_camel_keys(payload.model_dump(by_alias=True)),
+                        )
+                        yield f"data: {evt.model_dump_json(by_alias=True)}\n\n"
                         break
-                    else:
-                        yield f"data: {json.dumps(event)}\n\n"
+                    elif tag == "trace_progress":
+                        evt = SSETraceProgressEvent(
+                            trace_progress=SSETraceProgress(
+                                trace_id=payload.trace_id,
+                                partial_result=_camel_keys(payload.model_dump(by_alias=True)),
+                            )
+                        )
+                        yield f"data: {evt.model_dump_json(by_alias=True)}\n\n"
+                    elif tag == "progress":
+                        evt = SSEProgressEvent(message=payload)
+                        yield f"data: {evt.model_dump_json(by_alias=True)}\n\n"
             finally:
                 if not eval_task.done():
                     eval_task.cancel()
@@ -512,7 +421,8 @@ async def evaluate_traces_stream(
 
         except Exception as exc:
             logger.exception("Evaluation stream failed")
-            yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+            evt = SSEErrorEvent(error=str(exc))
+            yield f"data: {evt.model_dump_json(by_alias=True)}\n\n"
 
         finally:
             shutil.rmtree(temp_dir)

@@ -56,8 +56,8 @@ export function AnnotationQueueView() {
         throw new Error('Failed to create eval set from golden session');
       }
 
-      const evalSetData = await evalSetResponse.json();
-      const evalSetBlob = new Blob([JSON.stringify(evalSetData.eval_set, null, 2)], { type: 'application/json' });
+      const evalSetEnvelope = await evalSetResponse.json();
+      const evalSetBlob = new Blob([JSON.stringify(evalSetEnvelope.data.evalSet, null, 2)], { type: 'application/json' });
       const evalSetFile = new File([evalSetBlob], `eval_set_${selectedGoldenId}.json`, { type: 'application/json' });
 
       const traceFiles = await Promise.all(
@@ -72,8 +72,8 @@ export function AnnotationQueueView() {
 
           if (!traceResponse.ok) return null;
 
-          const traceData = await traceResponse.json();
-          const traceBlob = new Blob([traceData.trace_content], { type: 'application/json' });
+          const traceEnvelope = await traceResponse.json();
+          const traceBlob = new Blob([traceEnvelope.data.traceContent], { type: 'application/json' });
           return new File([traceBlob], `trace_${item.sessionId}.jsonl`, { type: 'application/json' });
         })
       );

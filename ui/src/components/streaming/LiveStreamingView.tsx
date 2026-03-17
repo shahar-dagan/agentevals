@@ -42,6 +42,7 @@ export function LiveStreamingView() {
       try {
         const res = await fetch(config.api.endpoints.streamingSessions);
         if (!res.ok) return;
+        const envelope = await res.json();
         const sessions: Array<{
           sessionId: string;
           traceId: string;
@@ -51,7 +52,7 @@ export function LiveStreamingView() {
           startedAt: string;
           metadata: Record<string, unknown>;
           invocations?: StreamingInvocation[];
-        }> = await res.json();
+        }> = envelope.data;
         if (!mountedRef.current) return;
 
         setActiveSessions(prev => {
@@ -350,8 +351,8 @@ export function LiveStreamingView() {
         throw new Error('Failed to create eval set from golden session');
       }
 
-      const evalSetData = await evalSetResponse.json();
-      const evalSetBlob = new Blob([JSON.stringify(evalSetData.eval_set, null, 2)], { type: 'application/json' });
+      const evalSetEnvelope = await evalSetResponse.json();
+      const evalSetBlob = new Blob([JSON.stringify(evalSetEnvelope.data.evalSet, null, 2)], { type: 'application/json' });
       const evalSetFile = new File([evalSetBlob], `eval_set_${selectedGoldenId}.json`, { type: 'application/json' });
 
       if (import.meta.env.DEV) {
@@ -381,8 +382,8 @@ export function LiveStreamingView() {
             return null;
           }
 
-          const traceData = await traceResponse.json();
-          const traceBlob = new Blob([traceData.trace_content], { type: 'application/json' });
+          const traceEnvelope = await traceResponse.json();
+          const traceBlob = new Blob([traceEnvelope.data.traceContent], { type: 'application/json' });
           return new File([traceBlob], `trace_${sessionId}.jsonl`, { type: 'application/json' });
         })
       );

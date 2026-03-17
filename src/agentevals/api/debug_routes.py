@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from agentevals import __version__
 from ..utils.log_buffer import log_buffer
+from .models import StandardResponse, DebugLoadData, WSSessionStartedEvent, WSSessionCompleteEvent, SessionInfo
 
 if TYPE_CHECKING:
     from ..streaming.ws_server import StreamingTraceManager
@@ -189,7 +190,7 @@ async def create_debug_bundle(diagnostics: FrontendDiagnostics):
     )
 
 
-@debug_router.post("/load")
+@debug_router.post("/load", response_model=StandardResponse[DebugLoadData])
 async def load_debug_bundle(file: UploadFile = FastAPIFile(...)):
     if not _trace_manager:
         raise HTTPException(
@@ -240,27 +241,27 @@ async def load_debug_bundle(file: UploadFile = FastAPIFile(...)):
 
         _trace_manager.sessions[session.session_id] = session
 
-        await _trace_manager.broadcast_to_ui({
-            "type": "session_started",
-            "session": {
-                "sessionId": session.session_id,
-                "traceId": session.trace_id,
-                "evalSetId": session.eval_set_id,
-                "metadata": session.metadata,
-                "startedAt": session.started_at.isoformat(),
-            },
-        })
+        await _trace_manager.broadcast_to_ui(WSSessionStartedEvent(
+            session=SessionInfo(
+                session_id=session.session_id,
+                trace_id=session.trace_id,
+                eval_set_id=session.eval_set_id,
+                span_count=len(session.spans),
+                is_complete=False,
+                started_at=session.started_at.isoformat(),
+                metadata=session.metadata,
+            ),
+        ).model_dump(by_alias=True))
 
         invocations_data = await _trace_manager._extract_invocations(session)
         await _trace_manager._save_spans_to_temp_file(session)
 
-        await _trace_manager.broadcast_to_ui({
-            "type": "session_complete",
-            "sessionId": session.session_id,
-            "invocations": invocations_data,
-        })
+        await _trace_manager.broadcast_to_ui(WSSessionCompleteEvent(
+            session_id=session.session_id,
+            invocations=invocations_data,
+        ).model_dump(by_alias=True))
 
         loaded.append(session.session_id)
         logger.info("Loaded session from bug report: %s", session.session_id)
 
-    return {"loaded_sessions": loaded, "count": len(loaded)}
+    return StandardResponse(data=DebugLoadData(loaded_sessions=loaded, count=len(loaded)))

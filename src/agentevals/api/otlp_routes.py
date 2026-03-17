@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 from fastapi import APIRouter, Request, Response
 
 from ..extraction import flatten_otlp_attributes
+from .models import WSSpanReceivedEvent
 from ..trace_attrs import (
     OTEL_GENAI_INPUT_MESSAGES,
     OTEL_GENAI_OUTPUT_MESSAGES,
@@ -131,11 +132,10 @@ async def _process_traces(body: dict) -> None:
                         update["sessionId"] = session.session_id
                         await _trace_manager.broadcast_to_ui(update)
 
-                await _trace_manager.broadcast_to_ui({
-                    "type": "span_received",
-                    "sessionId": session.session_id,
-                    "span": span,
-                })
+                await _trace_manager.broadcast_to_ui(WSSpanReceivedEvent(
+                    session_id=session.session_id,
+                    span=span,
+                ).model_dump(by_alias=True))
 
                 _trace_manager.reset_idle_timer(session.session_id)
 
