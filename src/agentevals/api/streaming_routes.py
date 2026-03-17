@@ -280,9 +280,9 @@ async def prepare_evaluation(request: PrepareEvaluationRequest):
             })
 
         return StandardResponse(data=PrepareEvaluationData(
-            eval_set_url=f"http://localhost:8001/api/streaming/download/{os.path.basename(eval_set_file)}",
+            eval_set_url=f"/api/streaming/download/{os.path.basename(eval_set_file)}",
             trace_urls=[
-                f"http://localhost:8001/api/streaming/download/{os.path.basename(tf['file_path'])}"
+                f"/api/streaming/download/{os.path.basename(tf['file_path'])}"
                 for tf in trace_files
             ],
             num_traces=len(trace_files),

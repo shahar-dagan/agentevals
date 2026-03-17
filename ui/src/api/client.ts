@@ -1,4 +1,4 @@
-import type { RunResult, EvalConfig, TraceResult, StandardResponse } from '../lib/types';
+import type { RunResult, EvalConfig, TraceResult, MetricMetadata, StandardResponse } from '../lib/types';
 import { config } from '../config';
 
 const API_BASE_URL = `${config.api.baseUrl}/api`;
@@ -150,7 +150,7 @@ export async function evaluateTracesStreaming(
   }
 }
 
-export async function listMetrics() {
+export async function listMetrics(): Promise<MetricMetadata[]> {
   try {
     const response = await fetch(`${API_BASE_URL}/metrics`);
 
@@ -158,14 +158,14 @@ export async function listMetrics() {
       throw new Error(`Failed to fetch metrics: ${response.statusText}`);
     }
 
-    return unwrap(response);
+    return unwrap<MetricMetadata[]>(response);
   } catch (error) {
     console.error('Failed to list metrics:', error);
     throw error;
   }
 }
 
-export async function validateEvalSet(evalSetFile: File) {
+export async function validateEvalSet(evalSetFile: File): Promise<{ valid: boolean; evalSetId?: string; numCases?: number; errors?: string[] }> {
   const formData = new FormData();
   formData.append('eval_set_file', evalSetFile);
 
@@ -179,7 +179,7 @@ export async function validateEvalSet(evalSetFile: File) {
       throw new Error(`Failed to validate eval set: ${response.statusText}`);
     }
 
-    return unwrap(response);
+    return unwrap<{ valid: boolean; evalSetId?: string; numCases?: number; errors?: string[] }>(response);
   } catch (error) {
     console.error('Failed to validate eval set:', error);
     throw error;
@@ -247,10 +247,10 @@ export async function loadBugReport(
     throw new Error(errorMessage);
   }
 
-  return unwrap(response);
+  return unwrap<{ loadedSessions: string[]; count: number }>(response);
 }
 
-export async function healthCheck() {
+export async function healthCheck(): Promise<{ status: string; version: string }> {
   try {
     const response = await fetch(`${API_BASE_URL}/health`);
 
@@ -258,7 +258,7 @@ export async function healthCheck() {
       throw new Error(`Health check failed: ${response.statusText}`);
     }
 
-    return unwrap(response);
+    return unwrap<{ status: string; version: string }>(response);
   } catch (error) {
     console.error('Health check failed:', error);
     throw error;
