@@ -1,7 +1,7 @@
 VERSION := $(shell grep '^version' pyproject.toml | cut -d'"' -f2)
 WHEEL := dist/agentevals-$(VERSION)-py3-none-any.whl
 
-.PHONY: build build-bundle build-ui release clean dev-backend dev-frontend dev-bundle test
+.PHONY: build build-bundle build-ui release clean dev-backend dev-frontend dev-bundle test test-unit test-integration test-e2e
 
 build:
 	uv build
@@ -46,6 +46,15 @@ dev-bundle: build-ui
 
 test:
 	uv run pytest
+
+test-unit:
+	uv run pytest tests/ --ignore=tests/integration
+
+test-integration:
+	uv run pytest tests/integration/ -m "integration and not e2e" -v
+
+test-e2e:
+	uv run pytest tests/integration/ -m "e2e" -v
 
 clean:
 	rm -rf dist/ build/ src/agentevals/_static/ ui/dist/

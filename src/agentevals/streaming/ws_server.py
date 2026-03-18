@@ -36,14 +36,27 @@ class StreamingTraceManager:
     Args:
         session_ttl_hours: How long to keep completed sessions in memory (default: 2 hours)
         max_sessions: Maximum number of sessions to keep (default: 100)
+        completion_grace_seconds: Delay after root span before completing session (default: 3.0)
+        idle_timeout_seconds: Complete session after this many seconds of inactivity (default: 30.0)
+        reextraction_delay_seconds: Debounce delay for late-log re-extraction (default: 2.0)
     """
 
-    def __init__(self, session_ttl_hours: int = 2, max_sessions: int = 100):
+    def __init__(
+        self,
+        session_ttl_hours: int = 2,
+        max_sessions: int = 100,
+        completion_grace_seconds: float = 3.0,
+        idle_timeout_seconds: float = 30.0,
+        reextraction_delay_seconds: float = 2.0,
+    ):
         self.sessions: dict[str, TraceSession] = {}
         self.incremental_extractors: dict[str, IncrementalInvocationExtractor] = {}
         self.sse_queues: list[asyncio.Queue] = []
         self.session_ttl = timedelta(hours=session_ttl_hours)
         self.max_sessions = max_sessions
+        self.completion_grace_seconds = completion_grace_seconds
+        self.idle_timeout_seconds = idle_timeout_seconds
+        self.reextraction_delay_seconds = reextraction_delay_seconds
         self._cleanup_task: asyncio.Task | None = None
         self._completion_timers: dict[str, asyncio.Task] = {}
         self._idle_timers: dict[str, asyncio.Task] = {}
@@ -72,13 +85,16 @@ class StreamingTraceManager:
         """Gracefully shut down: close SSE clients and cancel background tasks."""
         for queue in self.sse_queues:
             queue.put_nowait(None)
+        pending = list(self._completion_timers.values()) + list(self._idle_timers.values())
         if self._cleanup_task:
-            self._cleanup_task.cancel()
-            try:
-                await self._cleanup_task
-            except asyncio.CancelledError:
-                pass
+            pending.append(self._cleanup_task)
             self._cleanup_task = None
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        self._completion_timers.clear()
+        self._idle_timers.clear()
 
     async def _cleanup_old_sessions_loop(self) -> None:
         """Periodically clean up old sessions to prevent memory leak."""
@@ -274,7 +290,7 @@ class StreamingTraceManager:
             self._completion_timers[session_id].cancel()
 
         self._completion_timers[session_id] = asyncio.create_task(
-            self._delayed_complete(session_id, 3.0)
+            self._delayed_complete(session_id, self.completion_grace_seconds)
         )
 
     def reset_idle_timer(self, session_id: str) -> None:
@@ -289,7 +305,7 @@ class StreamingTraceManager:
             self._idle_timers[session_id].cancel()
 
         self._idle_timers[session_id] = asyncio.create_task(
-            self._delayed_complete(session_id, 30.0)
+            self._delayed_complete(session_id, self.idle_timeout_seconds)
         )
 
     def schedule_log_reextraction(self, session_id: str) -> None:
@@ -304,7 +320,7 @@ class StreamingTraceManager:
             self._completion_timers[key].cancel()
 
         self._completion_timers[key] = asyncio.create_task(
-            self._delayed_reextract(session_id, 2.0)
+            self._delayed_reextract(session_id, self.reextraction_delay_seconds)
         )
 
     async def _delayed_complete(self, session_id: str, delay: float) -> None:

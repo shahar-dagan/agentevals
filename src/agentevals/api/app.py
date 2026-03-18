@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -23,10 +24,33 @@ try:
 except ImportError:
     pass
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    log_level_str = os.getenv("AGENTEVALS_LOG_LEVEL", "INFO").upper()
+    log_level = getattr(logging, log_level_str, logging.INFO)
+    logging.basicConfig(
+        level=log_level,
+        format="%(levelname)s:%(name)s:%(message)s",
+        force=True,
+    )
+    ae_logger = logging.getLogger("agentevals")
+    ae_logger.setLevel(log_level)
+    if log_buffer not in ae_logger.handlers:
+        log_buffer.setFormatter(logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
+        ae_logger.addHandler(log_buffer)
+    if _trace_manager:
+        _trace_manager.start_cleanup_task()
+    yield
+    if _trace_manager:
+        await _trace_manager.shutdown()
+    ae_logger.removeHandler(log_buffer)
+
+
 app = FastAPI(
     title="agentevals API",
     version=__version__,
     description="REST API for evaluating agent traces using ADK's scoring framework",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -105,26 +129,3 @@ if _has_ui and not os.getenv("AGENTEVALS_HEADLESS"):
         if file_path.is_file():
             return FileResponse(file_path)
         return FileResponse(_static_dir / "index.html")
-
-
-@app.on_event("startup")
-async def on_startup():
-    log_level_str = os.getenv("AGENTEVALS_LOG_LEVEL", "INFO").upper()
-    log_level = getattr(logging, log_level_str, logging.INFO)
-    logging.basicConfig(
-        level=log_level,
-        format="%(levelname)s:%(name)s:%(message)s",
-        force=True,
-    )
-    ae_logger = logging.getLogger("agentevals")
-    ae_logger.setLevel(log_level)
-    log_buffer.setFormatter(logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
-    ae_logger.addHandler(log_buffer)
-    if _trace_manager:
-        _trace_manager.start_cleanup_task()
-
-
-@app.on_event("shutdown")
-async def on_shutdown():
-    if _trace_manager:
-        await _trace_manager.shutdown()

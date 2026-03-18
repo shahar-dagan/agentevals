@@ -37,12 +37,59 @@ make build-ui          # build React app only → ui/dist/
 
 Both `build` and `build-bundle` produce `dist/agentevals-*.whl` with the same package name and version. The difference is that `build-bundle` embeds `ui/dist/` as `agentevals/_static/` inside the wheel. The hatchling `artifacts` config ensures the gitignored `_static/` directory is included.
 
-### Testing and cleanup
+### Testing
 
 ```bash
-make test              # run pytest
+make test              # run all tests (unit + integration, excludes e2e)
+make test-unit         # unit tests only (fast, no server startup)
+make test-integration  # integration tests — OTLP pipeline, session grouping, timing (no API keys)
+make test-e2e          # E2E tests — real agents as subprocesses (requires OPENAI_API_KEY)
+```
+
+### Cleanup
+
+```bash
 make clean             # remove dist/, build/, ui/dist/, src/agentevals/_static/
 ```
+
+## Testing
+
+### Test tiers
+
+Tests are organized into three tiers with different trade-offs:
+
+| Tier | Location | Transport | API keys | What it verifies |
+|------|----------|-----------|----------|------------------|
+| **Unit** | `tests/` (excl. integration) | `TestClient` / mocks | None | Business logic, route handlers, converters |
+| **Integration** | `tests/integration/` | ASGI in-process | None | OTLP session grouping, timing, concurrent batches, eval pipeline |
+| **E2E** | `tests/integration/test_live_agents.py` | Real uvicorn servers | `OPENAI_API_KEY` | Full pipeline — real agent → OTLP export → session creation → invocation extraction → API visibility |
+
+Integration tests use `httpx.ASGITransport` to hit the OTLP and streaming API routes in-process (no ports, no real HTTP). Timers are configured fast (0.1s grace, 0.5s idle) for quick deterministic tests.
+
+E2E tests start real uvicorn servers on ephemeral ports in a background thread, then run example agent scripts as subprocesses that emit real OTLP traces with `BatchSpanProcessor`/`BatchLogRecordProcessor` flush timing.
+
+### Running E2E tests
+
+E2E tests require `OPENAI_API_KEY` (used by LangChain and Strands agents). They are skipped automatically when the key is not set.
+
+```bash
+# Source your .env and run
+set -a && source .env && set +a && make test-e2e
+```
+
+### Adding tests for new examples
+
+When adding a new example agent to `examples/`, add corresponding E2E tests to ensure the full OTLP pipeline works:
+
+1. Add a test class in `tests/integration/test_live_agents.py` following the existing pattern (`TestLangchainZeroCode`, `TestStrandsZeroCode`)
+2. Each agent should have at minimum three tests:
+   - **Session creation** — agent runs successfully, session is created with spans (and logs if applicable)
+   - **Invocation extraction** — invocations are extracted with user/agent content
+   - **API visibility** — session appears in `GET /api/streaming/sessions`
+3. Use `_run_agent()` to run the example as a subprocess with the test OTLP endpoint
+4. Use `wait_for_session_complete_sync()` to poll until the session finalizes
+5. Mark the test class with the appropriate skip condition (e.g., `_skip_no_openai`)
+6. Use unique `session_name` values per test to avoid collisions within the session-scoped server fixture
 
 ## Runtime behavior
 
