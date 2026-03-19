@@ -2,15 +2,36 @@
 
 Custom graders let you score agent traces with your own logic. A grader is any program that reads `EvalInput` JSON from stdin and writes `EvalResult` JSON to stdout. This simple protocol means you can write graders in Python, JavaScript/TypeScript, or any language that can read/write JSON.
 
-## Quick Start (Python)
+## Quick Start
 
-### 1. Install the SDK
+### 1. Scaffold a grader
+
+```bash
+agentevals grader init my_grader
+```
+
+This creates a directory with boilerplate code and a `grader.yaml` manifest:
+
+```
+my_grader/
+├── my_grader.py     # scoring logic (implement your checks here)
+└── grader.yaml      # metadata manifest
+```
+
+You can also specify a language:
+
+```bash
+agentevals grader init my_grader --runtime js    # JavaScript
+agentevals grader init my_grader.ts              # TypeScript (inferred from extension)
+```
+
+### 2. Install the SDK (Python only)
 
 ```bash
 pip install agentevals-grader-sdk
 ```
 
-### 2. Write a grader
+### 3. Write a grader
 
 ```python
 # graders/response_quality.py
@@ -180,6 +201,69 @@ The file extension determines which interpreter is used:
 | `.py` | `python <file>` |
 | `.js`, `.ts` | `node <file>` |
 
+## Discovering Graders
+
+### List available graders
+
+```bash
+agentevals grader list                    # all sources
+agentevals grader list --source builtin   # only ADK built-in metrics
+agentevals grader list --source github    # only community graders
+```
+
+This shows graders from all registered sources: ADK built-in metrics and the community GitHub repository.
+
+## Remote Graders
+
+You can reference graders from the community repository directly in your eval config. They are downloaded and cached automatically on first use.
+
+```yaml
+metrics:
+  - tool_trajectory_avg_score
+
+  - name: response_quality
+    type: remote
+    source: github
+    ref: graders/response_quality/response_quality.py
+    threshold: 0.7
+```
+
+| Field | Required | Default | Description |
+|---|---|---|---|
+| `name` | yes | | Unique name for the grader (used in output) |
+| `type` | yes | | `remote` for graders fetched from a registry |
+| `source` | no | `github` | Grader source (`github`, or custom) |
+| `ref` | yes | | Path within the source (e.g. path in the GitHub repo) |
+| `threshold` | no | `0.5` | Score at or above this value means PASSED |
+| `timeout` | no | `30` | Subprocess timeout in seconds |
+| `config` | no | `{}` | Arbitrary key-value pairs passed to the grader |
+| `executor` | no | `local` | Execution environment (`local` or `docker` in the future) |
+
+Remote graders are cached in `~/.cache/agentevals/graders/`. To force a re-download, delete the cached file.
+
+### Configuring the GitHub source
+
+By default, graders are fetched from the official community repository. Override with environment variables:
+
+```bash
+export AGENTEVALS_GRADER_REPO="your-org/your-graders-repo"
+export AGENTEVALS_GRADER_BRANCH="main"
+```
+
+## Contributing Graders to the Community
+
+1. Scaffold a new grader:
+
+```bash
+agentevals grader init my_grader
+```
+
+2. Implement your scoring logic and update the `grader.yaml` manifest with a description, tags, and your name.
+
+3. Copy the `my_grader/` directory into the `graders/` folder of the community repository and open a PR.
+
+The community repo uses per-grader manifests. A CI workflow compiles all `graders/*/grader.yaml` files into a single `index.yaml` on merge, which is what `agentevals grader list` fetches.
+
 ## Architecture
 
 Custom graders use a layered architecture designed for extensibility.
@@ -187,7 +271,14 @@ Custom graders use a layered architecture designed for extensibility.
 ```
 ┌─────────────────────────────────────────┐
 │  Eval Config (YAML)                     │
-│  type: code, path: ./grader.py          │
+│  type: code | remote                    │
+└──────────────┬──────────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────────┐
+│  GraderResolver                         │
+│  Downloads remote → local cache         │
+│  (passthrough for type: code)           │
 └──────────────┬──────────────────────────┘
                │
                ▼
@@ -199,11 +290,11 @@ Custom graders use a layered architecture designed for extensibility.
                │
                ▼
 ┌─────────────────────────────────────────┐
-│  GraderBackend (ABC)                    │
+│  GraderBackend (ABC) — executor factory │
 │  async run(EvalInput) → EvalResult      │
 ├─────────────────────────────────────────┤
-│  SubprocessBackend                      │
-│  Runs a local file via Runtime registry │
+│  "local"  → SubprocessBackend           │
+│  "docker" → DockerBackend (future)      │
 └──────────────┬──────────────────────────┘
                │
                ▼
@@ -214,8 +305,10 @@ Custom graders use a layered architecture designed for extensibility.
 └─────────────────────────────────────────┘
 ```
 
-- **`GraderBackend`** is the primary abstraction. Any execution strategy that can accept `EvalInput` and return `EvalResult` fits here.
-- **`SubprocessBackend`** is the current implementation. It runs a local file as a child process, piping JSON over stdin/stdout.
+- **`GraderSource`** is the registry abstraction. Implementations (`BuiltinGraderSource`, `GitHubGraderSource`) list and fetch graders from different registries.
+- **`GraderResolver`** downloads remote graders and converts `RemoteGraderDef` to `CodeGraderDef` with a local cached path.
+- **`GraderBackend`** is the execution abstraction. The `executor` field in config selects which factory to use (`"local"` → `SubprocessBackend`). New executors (e.g. `DockerBackend`) register via `register_executor()`.
+- **`SubprocessBackend`** runs a local file as a child process, piping JSON over stdin/stdout.
 - **`Runtime`** is an internal detail of `SubprocessBackend` that maps file extensions to interpreter commands.
 - **`CustomGraderEvaluator`** adapts any `GraderBackend` into ADK's `Evaluator` interface, handling the conversion between ADK's `Invocation` objects and the simpler `EvalInput`/`EvalResult` protocol.
 
@@ -248,68 +341,65 @@ _RUNTIMES: list[Runtime] = [
 
 No other files need to change — the extension validator and evaluator pick it up automatically.
 
-### Adding a new backend type
+### Adding a new executor
 
-To support a different transport (e.g., HTTP, Docker), you would:
+To support a different execution environment (e.g., Docker), you need two things:
 
-1. Add a config model in `config.py`:
-
-```python
-class HttpGraderDef(BaseModel):
-    name: str
-    type: Literal["http"] = "http"
-    url: str
-    threshold: float = 0.5
-    timeout: int = 30
-    headers: dict[str, str] = Field(default_factory=dict)
-    config: dict[str, Any] = Field(default_factory=dict)
-```
-
-2. Add it to the union:
+1. Implement the backend in `custom_evaluators.py`:
 
 ```python
-CustomGraderDef = Annotated[
-    Union[BuiltinMetricDef, CodeGraderDef, HttpGraderDef],
-    Field(discriminator="type"),
-]
-```
-
-3. Implement the backend in `custom_evaluators.py`:
-
-```python
-class HttpBackend(GraderBackend):
-    def __init__(self, url: str, timeout: int, headers: dict[str, str] | None = None):
-        self._url = url
+class DockerBackend(GraderBackend):
+    def __init__(self, path: Path, timeout: int = 30):
+        self._path = path
         self._timeout = timeout
-        self._headers = headers or {}
 
     async def run(self, eval_input: EvalInput, metric_name: str) -> EvalResult:
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                self._url,
-                json=eval_input.model_dump(),
-                headers=self._headers,
-                timeout=self._timeout,
-            )
-            resp.raise_for_status()
-            return EvalResult.model_validate(resp.json())
+        # Build/run container, pipe JSON, return result
+        ...
 ```
 
-4. Wire it up in the factory in `runner.py`:
+2. Register it:
 
 ```python
-elif isinstance(grader_def, HttpGraderDef):
-    backend = HttpBackend(grader_def.url, grader_def.timeout, grader_def.headers)
+from agentevals.custom_evaluators import register_executor
+
+register_executor("docker", lambda path, timeout: DockerBackend(path, timeout))
 ```
 
-5. Add the type to `_TYPE_TO_MODEL` in `eval_config_loader.py` and `routes.py`.
-
-Users would then write:
+Users then set `executor: docker` in their config:
 
 ```yaml
 metrics:
-  - name: latency_check
-    type: http
-    url: https://grader.example.com/evaluate
-    threshold: 0.8
+  - name: untrusted_grader
+    type: code
+    path: ./graders/untrusted.py
+    executor: docker
+```
+
+### Adding a new grader source
+
+To support a different grader registry (e.g., a custom API), implement `GraderSource`:
+
+```python
+from agentevals.grader.sources import GraderSource, GraderInfo, register_source
+
+class MyRegistrySource(GraderSource):
+    @property
+    def source_name(self) -> str:
+        return "my-registry"
+
+    async def list_graders(self) -> list[GraderInfo]: ...
+    async def fetch_grader(self, ref: str, dest: Path) -> Path: ...
+
+register_source(MyRegistrySource())
+```
+
+Users can then reference graders from the new source:
+
+```yaml
+metrics:
+  - name: my_grader
+    type: remote
+    source: my-registry
+    ref: some/ref/path.py
 ```

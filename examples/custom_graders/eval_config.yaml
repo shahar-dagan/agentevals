@@ -9,10 +9,25 @@ metrics:
   # Built-in metric (unchanged)
   - tool_trajectory_avg_score
 
-  # Python grader — checks response quality
+  # Custom code graders (local scripts)
+  - name: tool_call_checker
+    type: code
+    path: ./examples/custom_graders/tool_call_checker.py
+    threshold: 1.0
+    config:
+      min_tool_calls: 1
+
   - name: response_quality
     type: code
     path: ./examples/custom_graders/response_quality.py
     threshold: 0.7
     config:
       min_response_length: 20
+
+  # refrence a grader from Github
+  - name: peters_grader
+    type: remote
+    source: github
+    ref: graders/peters_grader/peters_grader.py
+    threshold: 0.110
+    executor: local

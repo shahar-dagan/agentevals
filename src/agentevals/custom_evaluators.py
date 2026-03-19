@@ -14,11 +14,9 @@ import asyncio
 import logging
 import shutil
 import sys
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Optional
-
-from google.adk.evaluation.eval_case import Invocation, get_all_tool_calls
-from google.adk.evaluation.evaluator import EvaluationResult, EvalStatus, Evaluator, PerInvocationResult
+from typing import Any
 
 from agentevals_grader_sdk import (
     EvalInput,
@@ -27,6 +25,8 @@ from agentevals_grader_sdk import (
     ToolCallData,
     ToolResponseData,
 )
+from google.adk.evaluation.eval_case import Invocation, get_all_tool_calls
+from google.adk.evaluation.evaluator import EvalStatus, EvaluationResult, Evaluator, PerInvocationResult
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # GraderBackend — primary abstraction
 # ---------------------------------------------------------------------------
+
 
 class GraderBackend(abc.ABC):
     """Delivers :class:`EvalInput` to a grader and returns :class:`EvalResult`.
@@ -50,8 +51,14 @@ class GraderBackend(abc.ABC):
 # Runtime — language-specific helpers for SubprocessBackend
 # ---------------------------------------------------------------------------
 
+
 class Runtime(abc.ABC):
     """Maps a file extension to the command needed to run it."""
+
+    @property
+    @abc.abstractmethod
+    def name(self) -> str:
+        """Human-readable runtime name (e.g. ``"Python"``)."""
 
     @property
     @abc.abstractmethod
@@ -62,8 +69,20 @@ class Runtime(abc.ABC):
     def build_command(self, path: Path) -> list[str]:
         """Return the argv list to execute *path*."""
 
+    def is_available(self) -> bool:
+        """Return True if the runtime's interpreter is found on the system."""
+        try:
+            self.build_command(Path("__probe__"))
+            return True
+        except RuntimeError:
+            return False
+
 
 class PythonRuntime(Runtime):
+    @property
+    def name(self) -> str:
+        return "Python"
+
     @property
     def extensions(self) -> tuple[str, ...]:
         return (".py",)
@@ -71,8 +90,15 @@ class PythonRuntime(Runtime):
     def build_command(self, path: Path) -> list[str]:
         return [sys.executable, str(path)]
 
+    def is_available(self) -> bool:
+        return True
+
 
 class NodeRuntime(Runtime):
+    @property
+    def name(self) -> str:
+        return "Node.js"
+
     @property
     def extensions(self) -> tuple[str, ...]:
         return (".js", ".ts")
@@ -90,6 +116,11 @@ _RUNTIMES: list[Runtime] = [
 ]
 
 
+def get_runtimes() -> list[Runtime]:
+    """Return all registered runtimes."""
+    return list(_RUNTIMES)
+
+
 def supported_extensions() -> set[str]:
     """All file extensions supported by registered runtimes."""
     exts: set[str] = set()
@@ -104,15 +135,13 @@ def _resolve_runtime(path: Path) -> Runtime:
     for rt in _RUNTIMES:
         if suffix in rt.extensions:
             return rt
-    raise ValueError(
-        f"No runtime registered for extension '{suffix}'. "
-        f"Supported: {sorted(supported_extensions())}"
-    )
+    raise ValueError(f"No runtime registered for extension '{suffix}'. Supported: {sorted(supported_extensions())}")
 
 
 # ---------------------------------------------------------------------------
 # Subprocess runner (used by SubprocessBackend)
 # ---------------------------------------------------------------------------
+
 
 async def _run_subprocess(
     cmd: list[str],
@@ -135,12 +164,10 @@ async def _run_subprocess(
             proc.communicate(input=input_json.encode()),
             timeout=timeout,
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         proc.kill()
         await proc.wait()
-        raise TimeoutError(
-            f"Custom grader '{metric_name}' timed out after {timeout}s"
-        )
+        raise TimeoutError(f"Custom grader '{metric_name}' timed out after {timeout}s")
 
     stderr_text = stderr_bytes.decode(errors="replace").strip()
     if stderr_text:
@@ -154,21 +181,21 @@ async def _run_subprocess(
 
     stdout_text = stdout_bytes.decode().strip()
     if not stdout_text:
-        raise RuntimeError(
-            f"Custom grader '{metric_name}' produced no output on stdout"
-        )
+        hint = ""
+        if stderr_text:
+            hint = f"\nGrader stderr:\n{stderr_text}"
+        raise RuntimeError(f"Custom grader '{metric_name}' produced no output on stdout" + hint)
 
     try:
         return EvalResult.model_validate_json(stdout_text)
     except Exception as exc:
-        raise RuntimeError(
-            f"Custom grader '{metric_name}' produced invalid JSON: {exc}"
-        ) from exc
+        raise RuntimeError(f"Custom grader '{metric_name}' produced invalid JSON: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
 # Backend implementations
 # ---------------------------------------------------------------------------
+
 
 class SubprocessBackend(GraderBackend):
     """Runs a local code file (.py, .js, .ts, …) as a subprocess.
@@ -190,10 +217,32 @@ class SubprocessBackend(GraderBackend):
         return await _run_subprocess(cmd, eval_input.model_dump_json(), self._timeout, metric_name)
 
 
+# ---------------------------------------------------------------------------
+# Executor factory
+# ---------------------------------------------------------------------------
+
+_EXECUTOR_FACTORIES: dict[str, Callable[[Path, int], GraderBackend]] = {
+    "local": lambda path, timeout: SubprocessBackend(path, timeout),
+}
+
+
+def create_executor(executor_name: str, path: Path, timeout: int = 30) -> GraderBackend:
+    """Construct a GraderBackend by executor name (e.g. 'local', 'docker')."""
+    factory = _EXECUTOR_FACTORIES.get(executor_name)
+    if factory is None:
+        raise ValueError(f"Unknown executor '{executor_name}'. Available: {sorted(_EXECUTOR_FACTORIES.keys())}")
+    return factory(path, timeout)
+
+
+def register_executor(name: str, factory: Callable[[Path, int], GraderBackend]) -> None:
+    """Register a new executor factory (e.g. for Docker support)."""
+    _EXECUTOR_FACTORIES[name] = factory
+
 
 # ---------------------------------------------------------------------------
 # ADK Invocation ↔ InvocationData conversion
 # ---------------------------------------------------------------------------
+
 
 def _content_to_text(content) -> str:
     """Extract plain text from an ADK Content object."""
@@ -269,6 +318,7 @@ def invocations_to_data(invocations: list[Invocation] | None) -> list[Invocation
 # EvalResult → EvaluationResult conversion
 # ---------------------------------------------------------------------------
 
+
 def _eval_result_to_evaluation_result(
     result: EvalResult,
     threshold: float,
@@ -288,11 +338,13 @@ def _eval_result_to_evaluation_result(
     per_inv_results: list[PerInvocationResult] = []
     for i, inv in enumerate(actual_invocations):
         score = result.per_invocation_scores[i] if i < len(result.per_invocation_scores) else None
-        per_inv_results.append(PerInvocationResult(
-            actual_invocation=inv,
-            score=score,
-            eval_status=overall_status,
-        ))
+        per_inv_results.append(
+            PerInvocationResult(
+                actual_invocation=inv,
+                score=score,
+                eval_status=overall_status,
+            )
+        )
 
     return EvaluationResult(
         overall_score=result.score,
@@ -304,6 +356,7 @@ def _eval_result_to_evaluation_result(
 # ---------------------------------------------------------------------------
 # CustomGraderEvaluator — ADK Evaluator adapter (backend-agnostic)
 # ---------------------------------------------------------------------------
+
 
 class CustomGraderEvaluator(Evaluator):
     """Wraps any :class:`GraderBackend` as an ADK :class:`Evaluator`.
@@ -327,7 +380,7 @@ class CustomGraderEvaluator(Evaluator):
     async def evaluate_invocations(
         self,
         actual_invocations: list[Invocation],
-        expected_invocations: Optional[list[Invocation]] = None,
+        expected_invocations: list[Invocation] | None = None,
         conversation_scenario=None,
     ) -> EvaluationResult:
         eval_input = EvalInput(
@@ -346,6 +399,7 @@ class CustomGraderEvaluator(Evaluator):
 # Public helper — build and run a custom grader from a config definition
 # ---------------------------------------------------------------------------
 
+
 async def evaluate_custom_grader(
     grader_def,
     actual_invocations: list[Invocation],
@@ -358,11 +412,17 @@ async def evaluate_custom_grader(
     ``CustomGraderEvaluator``, and runs the evaluation.
     """
     import inspect as _inspect
-    from .config import CodeGraderDef
+
+    from .config import CodeGraderDef, RemoteGraderDef
     from .runner import MetricResult
 
+    if isinstance(grader_def, RemoteGraderDef):
+        from .grader.resolver import get_default_resolver
+
+        grader_def = await get_default_resolver().resolve(grader_def)
+
     if isinstance(grader_def, CodeGraderDef):
-        backend = SubprocessBackend(Path(grader_def.path), grader_def.timeout)
+        backend = create_executor(grader_def.executor, Path(grader_def.path), grader_def.timeout)
     else:
         raise ValueError(f"Unsupported custom grader type: {type(grader_def).__name__}")
 
@@ -381,6 +441,7 @@ async def evaluate_custom_grader(
             )
         else:
             import asyncio
+
             eval_result: EvaluationResult = await asyncio.to_thread(
                 evaluator.evaluate_invocations,
                 actual_invocations=actual_invocations,

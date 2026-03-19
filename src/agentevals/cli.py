@@ -140,18 +140,21 @@ def run(
     formatted = format_results(result, fmt=output)
     click.echo(formatted)
 
-    has_failure = any(
-        mr.eval_status == "FAILED" or mr.error
-        for tr in result.trace_results
-        for mr in tr.metric_results
-    )
+    has_failure = any(mr.eval_status == "FAILED" or mr.error for tr in result.trace_results for mr in tr.metric_results)
     if has_failure or result.errors:
         sys.exit(1)
 
 
 @main.command("list-metrics")
 def list_metrics() -> None:
-    """List all available evaluation metrics."""
+    """List all available evaluation metrics.
+
+    DEPRECATED: use ``agentevals grader list --source builtin`` instead.
+    """
+    click.echo(
+        "Note: list-metrics is deprecated. Use 'agentevals grader list --source builtin' instead.\n",
+        err=True,
+    )
     try:
         from google.adk.evaluation.metric_evaluator_registry import (
             DEFAULT_METRIC_EVALUATOR_REGISTRY,
@@ -181,6 +184,256 @@ def list_metrics() -> None:
         for pm in PrebuiltMetrics:
             click.echo(f"  {pm.value}")
         click.echo()
+
+
+# ---------------------------------------------------------------------------
+# agentevals grader ...
+# ---------------------------------------------------------------------------
+
+
+@main.group()
+def grader() -> None:
+    """Manage graders: scaffold, list, and discover."""
+
+
+@grader.command("init")
+@click.argument("name")
+@click.option(
+    "--output-dir",
+    "-o",
+    type=click.Path(),
+    default=".",
+    help="Parent directory for the new grader folder (default: current directory).",
+)
+@click.option(
+    "--runtime",
+    "-r",
+    default=None,
+    help="Language runtime: py, js, ts (default: inferred from name or py).",
+)
+def grader_init(name: str, output_dir: str, runtime: str | None) -> None:
+    """Scaffold a new grader with boilerplate code and a grader.yaml manifest.
+
+    NAME is the grader name. If it ends with a recognized extension (.py, .js,
+    .ts) the language is inferred automatically; otherwise use --runtime.
+
+    \b
+    Examples:
+      agentevals grader init my_grader
+      agentevals grader init my_grader.ts
+      agentevals grader init my_grader --runtime js
+    """
+    from pathlib import Path as _Path
+
+    from .grader.templates import scaffold_grader
+
+    try:
+        grader_dir = scaffold_grader(name, output_dir=_Path(output_dir), runtime=runtime)
+    except (ValueError, OSError) as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    click.echo(f"Created grader in {grader_dir}/")
+    click.echo()
+    click.echo("Files:")
+    for f in sorted(grader_dir.iterdir()):
+        click.echo(f"  {f.relative_to(grader_dir.parent)}")
+    click.echo()
+    click.echo("Next steps:")
+    click.echo("  1. Implement your scoring logic in the generated code file")
+    click.echo("  2. Add it to your eval_config.yaml:")
+    click.echo()
+
+    code_files = [f for f in grader_dir.iterdir() if f.suffix in (".py", ".js", ".ts")]
+    grader_name = grader_dir.name
+    if code_files:
+        rel = code_files[0].relative_to(grader_dir.parent)
+        click.echo(f"     - name: {grader_name}")
+        click.echo("       type: code")
+        click.echo(f"       path: ./{rel}")
+        click.echo("       threshold: 0.5")
+    click.echo()
+    click.echo("  3. Run: agentevals run <trace_file> --config eval_config.yaml")
+
+
+@grader.command("runtimes")
+def grader_runtimes() -> None:
+    """Show supported language runtimes and execution environments."""
+    from .custom_evaluators import _EXECUTOR_FACTORIES, get_runtimes
+
+    click.echo("Language runtimes:\n")
+    for rt in get_runtimes():
+        exts = ", ".join(rt.extensions)
+        available = "available" if rt.is_available() else "not found"
+        click.echo(f"  {rt.name:<12}  extensions: {exts:<16}  ({available})")
+
+    click.echo("\nExecutors:\n")
+    for name in sorted(_EXECUTOR_FACTORIES):
+        click.echo(f"  {name}")
+
+    click.echo()
+
+
+@grader.command("list")
+@click.option(
+    "--source",
+    "-s",
+    type=click.Choice(["all", "builtin", "github"]),
+    default="all",
+    help="Filter graders by source (default: all).",
+)
+@click.option(
+    "--refresh",
+    is_flag=True,
+    default=False,
+    help="Ignore cached results and fetch fresh data.",
+)
+def grader_list(source: str, refresh: bool) -> None:
+    """List available graders from all registered sources."""
+    from .grader.sources import _cache_dir, get_sources
+
+    if refresh:
+        import shutil
+
+        cache = _cache_dir()
+        if cache.exists():
+            shutil.rmtree(cache, ignore_errors=True)
+
+    sources = get_sources()
+    if source != "all":
+        sources = [s for s in sources if s.source_name == source]
+
+    click.echo("  Fetching graders...", nl=False)
+    all_graders = asyncio.run(_collect_graders(sources))
+    click.echo("\r" + " " * 30 + "\r", nl=False)
+
+    if not all_graders:
+        click.echo("No graders found.")
+        return
+
+    max_name = max(len(g.name) for g in all_graders)
+    max_src = max(len(g.source) for g in all_graders)
+
+    try:
+        term_width = os.get_terminal_size().columns
+    except OSError:
+        term_width = 120
+    desc_width = max(20, term_width - max_name - max_src - 8)
+
+    click.echo(f"  {'NAME':<{max_name}}  {'SOURCE':<{max_src}}  DESCRIPTION")
+    click.echo(f"  {'-' * max_name}  {'-' * max_src}  {'-' * min(40, desc_width)}")
+
+    for g in sorted(all_graders, key=lambda x: (x.source, x.name)):
+        lang = f" [{g.language}]" if g.language else ""
+        desc = g.description + lang
+        if len(desc) > desc_width:
+            desc = desc[: desc_width - 3] + "..."
+        click.echo(f"  {g.name:<{max_name}}  {g.source:<{max_src}}  {desc}")
+
+    click.echo(f"\n  {len(all_graders)} grader(s) found.")
+
+
+async def _collect_graders(sources):
+    """Gather grader lists from all sources concurrently."""
+    import asyncio as _asyncio
+
+    from .grader.sources import GraderInfo
+
+    results: list[GraderInfo] = []
+    tasks = [s.list_graders() for s in sources]
+    for graders in await _asyncio.gather(*tasks, return_exceptions=True):
+        if isinstance(graders, BaseException):
+            click.echo(f"  Warning: failed to fetch from a source: {graders}", err=True)
+            continue
+        results.extend(graders)
+    return results
+
+
+@grader.command("config")
+@click.argument("name")
+@click.option(
+    "--path",
+    "-p",
+    "grader_path",
+    default=None,
+    help="Path to the grader script (used for local code graders).",
+)
+@click.option(
+    "--threshold",
+    "-t",
+    type=float,
+    default=None,
+    help="Score threshold (default: 0.5 for custom graders).",
+)
+def grader_config(name: str, grader_path: str | None, threshold: float | None) -> None:
+    """Generate an eval_config.yaml snippet for a grader."""
+    import yaml as _yaml
+
+    from .builtin_metrics import METRICS_NEEDING_EXPECTED, METRICS_NEEDING_GCP, METRICS_NEEDING_LLM
+    from .grader.sources import get_sources
+
+    sources = get_sources()
+    all_graders = asyncio.run(_collect_graders(sources))
+
+    match = next((g for g in all_graders if g.name == name), None)
+
+    if match and match.source == "builtin":
+        needs_eval_set = name in METRICS_NEEDING_EXPECTED
+        needs_llm = name in METRICS_NEEDING_LLM
+        needs_gcp = name in METRICS_NEEDING_GCP
+
+        entry: dict = {"name": name, "type": "builtin"}
+        if threshold is not None:
+            entry["threshold"] = threshold
+        else:
+            entry["threshold"] = 0.5
+        if needs_llm:
+            entry["judge_model"] = "gemini-2.5-flash"
+
+        snippet: dict = {"metrics": [entry]}
+
+        notes: list[str] = []
+        if needs_eval_set:
+            notes.append("Requires --eval-set (golden eval set with expected responses)")
+        if needs_llm:
+            notes.append("Requires GOOGLE_API_KEY (or GEMINI_API_KEY) for LLM judge")
+        if needs_gcp:
+            notes.append("Requires GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION (Vertex AI)")
+
+        comment = "# Add to your eval_config.yaml under 'metrics':"
+        if notes:
+            comment += "\n#\n# Notes:\n" + "\n".join(f"#   - {n}" for n in notes)
+    elif match and match.source != "builtin":
+        entry: dict = {
+            "name": name,
+            "type": "remote",
+            "source": match.source,
+            "ref": match.ref or f"graders/{name}",
+        }
+        if threshold is not None:
+            entry["threshold"] = threshold
+        else:
+            entry["threshold"] = 0.5
+        entry["executor"] = "local"
+        snippet = {"custom_graders": [entry]}
+        comment = "# Add to your eval_config.yaml under 'custom_graders':"
+    else:
+        path_val = grader_path or f"./{name}/{name}.py"
+        entry = {
+            "name": name,
+            "type": "code",
+            "path": path_val,
+        }
+        if threshold is not None:
+            entry["threshold"] = threshold
+        else:
+            entry["threshold"] = 0.5
+        entry["executor"] = "local"
+        snippet = {"custom_graders": [entry]}
+        comment = "# Add to your eval_config.yaml under 'custom_graders':"
+
+    rendered = _yaml.dump(snippet, default_flow_style=False, sort_keys=False)
+    click.echo(f"\n{comment}\n")
+    click.echo(rendered)
 
 
 def _link_server_shutdown(*servers) -> None:
@@ -248,8 +501,9 @@ def serve(dev: bool, host: str, port: int, otlp_port: int, eval_sets: str | None
 
     Use --dev to enable live streaming mode for agent development.
     """
-    import uvicorn
     from pathlib import Path
+
+    import uvicorn
 
     level = logging.WARNING
     if verbose == 1:

@@ -6,10 +6,27 @@ build-backend = "hatchling.build"
 name = "agentevals-grader-sdk"
 version = "0.1.0"
 description = "Lightweight SDK for building custom agentevals graders"
+readme = "README.md"
+license = "Apache-2.0"
 requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.0",
 ]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Testing",
+]
+
+[project.urls]
+Homepage = "https://github.com/agentevals-dev/agentevals"
+Repository = "https://github.com/agentevals-dev/agentevals/tree/main/packages/grader-sdk-py"
+Documentation = "https://github.com/agentevals-dev/agentevals/blob/main/docs/custom-graders.md"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/agentevals_grader_sdk"]

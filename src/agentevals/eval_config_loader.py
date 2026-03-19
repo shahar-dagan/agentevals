@@ -13,6 +13,7 @@ from .config import (
     CodeGraderDef,
     CustomGraderDef,
     EvalRunConfig,
+    RemoteGraderDef,
 )
 
 logger = logging.getLogger(__name__)
@@ -20,6 +21,7 @@ logger = logging.getLogger(__name__)
 _TYPE_TO_MODEL = {
     "builtin": BuiltinMetricDef,
     "code": CodeGraderDef,
+    "remote": RemoteGraderDef,
 }
 
 
@@ -45,8 +47,7 @@ def _parse_grader_entry(entry: str | dict[str, Any]) -> tuple[str | None, Custom
 
     if grader_type not in _TYPE_TO_MODEL:
         raise ValueError(
-            f"Unknown grader type '{grader_type}' for '{name}'. "
-            f"Valid types: {list(_TYPE_TO_MODEL.keys())}"
+            f"Unknown grader type '{grader_type}' for '{name}'. Valid types: {list(_TYPE_TO_MODEL.keys())}"
         )
 
     model_cls = _TYPE_TO_MODEL[grader_type]
@@ -69,7 +70,7 @@ def load_eval_config(path: str | Path) -> EvalRunConfig:
     if not path.exists():
         raise FileNotFoundError(f"Eval config file not found: {path}")
 
-    with open(path, "r") as f:
+    with open(path) as f:
         data = yaml.safe_load(f)
 
     if not isinstance(data, dict):

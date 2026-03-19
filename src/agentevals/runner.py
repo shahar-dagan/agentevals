@@ -6,14 +6,14 @@ import asyncio
 import json
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Any, Optional
-
-from pydantic import BaseModel, ConfigDict, Field
-from pydantic.alias_generators import to_camel
+from typing import Any
 
 from google.adk.evaluation.eval_case import Invocation
 from google.adk.evaluation.eval_set import EvalSet
+from pydantic import BaseModel, ConfigDict, Field
+from pydantic.alias_generators import to_camel
 
+from .builtin_metrics import evaluate_builtin_metric
 from .config import (
     CustomGraderDef,
     EvalRunConfig,
@@ -22,8 +22,6 @@ from .converter import ConversionResult, convert_traces
 from .loader.base import TraceLoader
 from .loader.jaeger import JaegerJsonLoader
 from .loader.otlp import OtlpJsonLoader
-
-from .builtin_metrics import evaluate_builtin_metric
 from .trace_metrics import extract_performance_metrics
 
 logger = logging.getLogger(__name__)
@@ -67,22 +65,20 @@ def get_loader(format_name: str) -> TraceLoader:
         "otlp-json": OtlpJsonLoader,
     }
     if format_name not in loaders:
-        raise ValueError(
-            f"Unknown trace format '{format_name}'. Available: {list(loaders.keys())}"
-        )
+        raise ValueError(f"Unknown trace format '{format_name}'. Available: {list(loaders.keys())}")
     return loaders[format_name]()
 
 
 def load_eval_set(path: str) -> EvalSet:
-    with open(path, "r") as f:
+    with open(path) as f:
         data = json.load(f)
     return EvalSet.model_validate(data)
 
 
 async def run_evaluation(
     config: EvalRunConfig,
-    progress_callback: Optional[ProgressCallback] = None,
-    trace_progress_callback: Optional[TraceProgressCallback] = None,
+    progress_callback: ProgressCallback | None = None,
+    trace_progress_callback: TraceProgressCallback | None = None,
 ) -> RunResult:
     result = RunResult()
 
@@ -128,7 +124,9 @@ async def run_evaluation(
     async def _evaluate_trace_bounded(idx: int, conv_result: ConversionResult) -> TraceResult:
         async with trace_semaphore:
             if progress_callback:
-                trace_id_short = conv_result.trace_id[:12] + "..." if len(conv_result.trace_id) > 12 else conv_result.trace_id
+                trace_id_short = (
+                    conv_result.trace_id[:12] + "..." if len(conv_result.trace_id) > 12 else conv_result.trace_id
+                )
                 await progress_callback(f"Trace {idx + 1}/{total_traces}: {trace_id_short}")
 
             trace = trace_map.get(conv_result.trace_id)
@@ -148,10 +146,7 @@ async def run_evaluation(
             )
 
     trace_results = await asyncio.gather(
-        *[
-            _evaluate_trace_bounded(idx, conv_result)
-            for idx, conv_result in enumerate(conversion_results)
-        ],
+        *[_evaluate_trace_bounded(idx, conv_result) for idx, conv_result in enumerate(conversion_results)],
         return_exceptions=True,
     )
 
@@ -200,8 +195,8 @@ async def _evaluate_trace(
     judge_model: str | None,
     threshold: float | None,
     eval_semaphore: asyncio.Semaphore,
-    progress_callback: Optional[ProgressCallback] = None,
-    trace_progress_callback: Optional[TraceProgressCallback] = None,
+    progress_callback: ProgressCallback | None = None,
+    trace_progress_callback: TraceProgressCallback | None = None,
     trace=None,
     performance_metrics: dict[str, Any] | None = None,
 ) -> TraceResult:
@@ -253,6 +248,7 @@ async def _evaluate_trace(
             if progress_callback:
                 await progress_callback(f"Running {grader_def.name}...")
             from .custom_evaluators import evaluate_custom_grader
+
             result = await evaluate_custom_grader(
                 grader_def=grader_def,
                 actual_invocations=actual_invocations,
@@ -283,9 +279,7 @@ def _find_expected_invocations(
             return case.conversation
         return None
 
-    actual_user_text = (
-        _get_user_text(actual_invocations[0]) if actual_invocations else None
-    )
+    actual_user_text = _get_user_text(actual_invocations[0]) if actual_invocations else None
     if not actual_user_text:
         case = eval_set.eval_cases[0]
         return case.conversation if case.conversation else None

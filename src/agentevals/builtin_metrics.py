@@ -11,9 +11,10 @@ from google.adk.evaluation.eval_case import Invocation, get_all_tool_calls
 from google.adk.evaluation.eval_metrics import (
     BaseCriterion,
     EvalMetric,
+    HallucinationsCriterion,
     JudgeModelOptions,
     LlmAsAJudgeCriterion,
-    HallucinationsCriterion,
+    LlmBackedUserSimulatorCriterion,
     RubricsBasedCriterion,
     ToolTrajectoryCriterion,
 )
@@ -33,9 +34,13 @@ METRICS_NEEDING_LLM = {
     "final_response_match_v2",
     "rubric_based_final_response_quality_v1",
     "hallucinations_v1",
-    "safety_v1",
     "rubric_based_tool_use_quality_v1",
     "per_turn_user_simulator_quality_v1",
+}
+
+METRICS_NEEDING_GCP = {
+    "response_evaluation_score",
+    "safety_v1",
 }
 
 
@@ -63,10 +68,7 @@ def build_eval_metric(
 
     if metric_name == "tool_trajectory_avg_score":
         criterion = ToolTrajectoryCriterion(threshold=effective_threshold)
-    elif metric_name in (
-        "final_response_match_v2",
-        "safety_v1",
-    ):
+    elif metric_name == "final_response_match_v2":
         judge_opts = JudgeModelOptions()
         if judge_model:
             judge_opts.judge_model = judge_model
@@ -95,7 +97,15 @@ def build_eval_metric(
             judge_model_options=judge_opts,
             rubrics=rubric_objects,
         )
-    elif metric_name in ("response_match_score", "response_evaluation_score"):
+    elif metric_name == "per_turn_user_simulator_quality_v1":
+        judge_opts = JudgeModelOptions()
+        if judge_model:
+            judge_opts.judge_model = judge_model
+        criterion = LlmBackedUserSimulatorCriterion(
+            threshold=effective_threshold,
+            judge_model_options=judge_opts,
+        )
+    elif metric_name in ("response_match_score", "response_evaluation_score", "safety_v1"):
         criterion = BaseCriterion(threshold=effective_threshold)
 
     return EvalMetric(
@@ -145,24 +155,20 @@ def extract_trajectory_details(eval_result: EvaluationResult) -> dict[str, Any]:
 
         if actual_inv and actual_inv.intermediate_data:
             tool_calls = get_all_tool_calls(actual_inv.intermediate_data)
-            actual_tools = [
-                {"name": tc.name, "args": tc.args}
-                for tc in tool_calls
-            ]
+            actual_tools = [{"name": tc.name, "args": tc.args} for tc in tool_calls]
 
         if expected_inv and expected_inv.intermediate_data:
             tool_calls = get_all_tool_calls(expected_inv.intermediate_data)
-            expected_tools = [
-                {"name": tc.name, "args": tc.args}
-                for tc in tool_calls
-            ]
+            expected_tools = [{"name": tc.name, "args": tc.args} for tc in tool_calls]
 
-        comparisons.append({
-            "invocation_id": actual_inv.invocation_id if actual_inv else None,
-            "expected": expected_tools,
-            "actual": actual_tools,
-            "matched": per_inv_result.score == 1.0,
-        })
+        comparisons.append(
+            {
+                "invocation_id": actual_inv.invocation_id if actual_inv else None,
+                "expected": expected_tools,
+                "actual": actual_tools,
+                "matched": per_inv_result.score == 1.0,
+            }
+        )
 
     return {"comparisons": comparisons}
 

@@ -1,0 +1,60 @@
+name: Publish grader SDK
+
+on:
+  push:
+    tags:
+      - 'grader-sdk-v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. grader-sdk-v0.1.0)'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Verify tag matches pyproject.toml version
+        run: |
+          REF=${{ github.event.inputs.tag || github.ref_name }}
+          TOML_VERSION=$(grep '^version' packages/grader-sdk-py/pyproject.toml | cut -d'"' -f2)
+          TAG_VERSION=${REF#grader-sdk-v}
+          if [ "$TOML_VERSION" != "$TAG_VERSION" ]; then
+            echo "Error: $REF does not match packages/grader-sdk-py/pyproject.toml version $TOML_VERSION"
+            exit 1
+          fi
+
+      - name: Install build tool
+        run: pip install build
+
+      - name: Build wheel and sdist
+        run: python -m build packages/grader-sdk-py/ --outdir dist/
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: grader-sdk-dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: grader-sdk-dist
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
