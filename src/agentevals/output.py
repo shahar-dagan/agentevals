@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from .runner import MetricResult, RunResult, TraceResult
+from .runner import MetricResult, RunResult
 
 
 def format_results(run_result: RunResult, fmt: str = "table") -> str:
@@ -45,10 +45,7 @@ def _format_table(run_result: RunResult) -> str:
             score_str = f"{mr.score:.4f}" if mr.score is not None else "N/A"
             error_str = mr.error or ""
             per_inv = (
-                ", ".join(
-                    f"{s:.4f}" if s is not None else "N/A"
-                    for s in mr.per_invocation_scores
-                )
+                ", ".join(f"{s:.4f}" if s is not None else "N/A" for s in mr.per_invocation_scores)
                 if mr.per_invocation_scores
                 else ""
             )
@@ -81,21 +78,35 @@ def _format_table(run_result: RunResult) -> str:
             lines.append("\n  Performance Metrics:")
 
             lat = perf["latency"]
-            lines.append(f"    Overall Latency: p50={lat['overall']['p50']:.0f}ms, p95={lat['overall']['p95']:.0f}ms, p99={lat['overall']['p99']:.0f}ms")
-            lines.append(f"    LLM Latency:     p50={lat['llm_calls']['p50']:.0f}ms, p95={lat['llm_calls']['p95']:.0f}ms, p99={lat['llm_calls']['p99']:.0f}ms")
-            lines.append(f"    Tool Latency:    p50={lat['tool_executions']['p50']:.0f}ms, p95={lat['tool_executions']['p95']:.0f}ms, p99={lat['tool_executions']['p99']:.0f}ms")
+            lines.append(
+                f"    Overall Latency: p50={lat['overall']['p50']:.0f}ms, p95={lat['overall']['p95']:.0f}ms, p99={lat['overall']['p99']:.0f}ms"
+            )
+            lines.append(
+                f"    LLM Latency:     p50={lat['llm_calls']['p50']:.0f}ms, p95={lat['llm_calls']['p95']:.0f}ms, p99={lat['llm_calls']['p99']:.0f}ms"
+            )
+            lines.append(
+                f"    Tool Latency:    p50={lat['tool_executions']['p50']:.0f}ms, p95={lat['tool_executions']['p95']:.0f}ms, p99={lat['tool_executions']['p99']:.0f}ms"
+            )
 
             tok = perf["tokens"]
-            lines.append(f"    Tokens: {tok['total']} total ({tok['total_prompt']} prompt + {tok['total_output']} output)")
-            lines.append(f"    Per LLM Call:    p50={tok['per_llm_call']['p50']:.0f}, p95={tok['per_llm_call']['p95']:.0f}, p99={tok['per_llm_call']['p99']:.0f}")
+            lines.append(
+                f"    Tokens: {tok['total']} total ({tok['total_prompt']} prompt + {tok['total_output']} output)"
+            )
+            lines.append(
+                f"    Per LLM Call:    p50={tok['per_llm_call']['p50']:.0f}, p95={tok['per_llm_call']['p95']:.0f}, p99={tok['per_llm_call']['p99']:.0f}"
+            )
 
         lines.append("")
 
     if run_result.performance_metrics:
         lines.append("Overall Performance:")
         perf = run_result.performance_metrics
-        lines.append(f"  Total Tokens: {perf['tokens']['total']} ({perf['tokens']['total_prompt']} prompt + {perf['tokens']['total_output']} output)")
-        lines.append(f"  Avg per Trace: {perf['tokens']['avg_per_trace']['prompt']:.0f} prompt, {perf['tokens']['avg_per_trace']['output']:.0f} output")
+        lines.append(
+            f"  Total Tokens: {perf['tokens']['total']} ({perf['tokens']['total_prompt']} prompt + {perf['tokens']['total_output']} output)"
+        )
+        lines.append(
+            f"  Avg per Trace: {perf['tokens']['avg_per_trace']['prompt']:.0f} prompt, {perf['tokens']['avg_per_trace']['output']:.0f} output"
+        )
         lines.append("")
 
     return "\n".join(lines)
@@ -151,9 +162,7 @@ def _format_summary(run_result: RunResult) -> str:
             if mr.error:
                 lines.append(f"  {icon} {mr.metric_name}: ERROR - {mr.error}")
             elif mr.score is not None:
-                lines.append(
-                    f"  {icon} {mr.metric_name}: {mr.score:.4f} ({mr.eval_status})"
-                )
+                lines.append(f"  {icon} {mr.metric_name}: {mr.score:.4f} ({mr.eval_status})")
             else:
                 lines.append(f"  {icon} {mr.metric_name}: N/A ({mr.eval_status})")
         lines.append("")

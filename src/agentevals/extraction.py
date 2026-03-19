@@ -68,9 +68,7 @@ def extract_user_text_from_attrs(attrs: dict[str, Any]) -> str | None:
                 if content_dict.get("role") == "user":
                     parts = content_dict.get("parts", [])
                     if parts:
-                        return " ".join(
-                            p.get("text", "") for p in parts if "text" in p
-                        )
+                        return " ".join(p.get("text", "") for p in parts if "text" in p)
 
     messages_raw = attrs.get(OTEL_GENAI_INPUT_MESSAGES)
     if messages_raw:
@@ -148,7 +146,7 @@ def extract_tool_call_from_attrs(
     tool_name = attrs.get(OTEL_GENAI_TOOL_NAME)
     if not tool_name:
         if operation_name.startswith("execute_tool "):
-            tool_name = operation_name[len("execute_tool "):]
+            tool_name = operation_name[len("execute_tool ") :]
         else:
             return None
 
@@ -167,9 +165,7 @@ def extract_tool_call_from_attrs(
     if not args:
         messages_raw = attrs.get(OTEL_GENAI_INPUT_MESSAGES)
         if messages_raw:
-            fallback_args, fallback_id = extract_tool_call_args_from_messages(
-                messages_raw, tool_name
-            )
+            fallback_args, fallback_id = extract_tool_call_args_from_messages(messages_raw, tool_name)
             if fallback_args:
                 args = fallback_args
             if fallback_id:
@@ -252,10 +248,7 @@ def is_adk_scope(span: Span) -> bool:
 
 
 def is_llm_span(span: Span) -> bool:
-    return (
-        span.get_tag(OTEL_GENAI_REQUEST_MODEL) is not None
-        or span.get_tag(OTEL_GENAI_INPUT_MESSAGES) is not None
-    )
+    return span.get_tag(OTEL_GENAI_REQUEST_MODEL) is not None or span.get_tag(OTEL_GENAI_INPUT_MESSAGES) is not None
 
 
 def is_tool_span(span: Span) -> bool:
@@ -329,10 +322,7 @@ class AdkExtractor:
         return "adk"
 
     def find_invocation_spans(self, trace: Trace) -> list[Span]:
-        matches = [
-            s for s in trace.all_spans
-            if is_adk_scope(s) and s.operation_name.startswith("invoke_agent")
-        ]
+        matches = [s for s in trace.all_spans if is_adk_scope(s) and s.operation_name.startswith("invoke_agent")]
         matches.sort(key=lambda s: s.start_time)
         return matches
 

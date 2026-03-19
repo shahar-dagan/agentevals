@@ -21,7 +21,6 @@ from .loader.base import Span, Trace
 from .trace_attrs import (
     OTEL_GENAI_INPUT_MESSAGES,
     OTEL_GENAI_OUTPUT_MESSAGES,
-    OTEL_GENAI_REQUEST_MODEL,
     OTEL_GENAI_TOOL_CALL_ARGUMENTS,
     OTEL_GENAI_TOOL_CALL_ID,
     OTEL_GENAI_TOOL_CALL_RESULT,
@@ -72,8 +71,7 @@ def convert_genai_trace(trace: Trace) -> ConversionResult:
 
     if llm_root_spans:
         has_messages = any(
-            s.get_tag(OTEL_GENAI_INPUT_MESSAGES) or s.get_tag(OTEL_GENAI_OUTPUT_MESSAGES)
-            for s in llm_root_spans
+            s.get_tag(OTEL_GENAI_INPUT_MESSAGES) or s.get_tag(OTEL_GENAI_OUTPUT_MESSAGES) for s in llm_root_spans
         )
         if not has_messages:
             msg = (
@@ -87,8 +85,7 @@ def convert_genai_trace(trace: Trace) -> ConversionResult:
     if len(llm_root_spans) > 1:
         if not any(is_invocation_span(s) for s in llm_root_spans):
             has_enriched = any(
-                s.get_tag(OTEL_GENAI_INPUT_MESSAGES) and s.get_tag(OTEL_GENAI_OUTPUT_MESSAGES)
-                for s in llm_root_spans
+                s.get_tag(OTEL_GENAI_INPUT_MESSAGES) and s.get_tag(OTEL_GENAI_OUTPUT_MESSAGES) for s in llm_root_spans
             )
 
             if has_enriched and _is_broadcast_enriched(llm_root_spans[0]):
@@ -107,9 +104,7 @@ def convert_genai_trace(trace: Trace) -> ConversionResult:
     logger.debug(f"Found {len(invocation_spans)} invocation spans")
 
     if not invocation_spans:
-        result.warnings.append(
-            f"Trace {trace.trace_id}: no GenAI invocation spans found"
-        )
+        result.warnings.append(f"Trace {trace.trace_id}: no GenAI invocation spans found")
         return result
 
     for inv_span in invocation_spans:
@@ -142,12 +137,13 @@ def _find_genai_invocation_spans(trace: Trace) -> list[Span]:
 
         if len(llm_spans) > 1:
             has_enriched_messages = any(
-                s.get_tag(OTEL_GENAI_INPUT_MESSAGES) or s.get_tag(OTEL_GENAI_OUTPUT_MESSAGES)
-                for s in llm_spans
+                s.get_tag(OTEL_GENAI_INPUT_MESSAGES) or s.get_tag(OTEL_GENAI_OUTPUT_MESSAGES) for s in llm_spans
             )
 
             if has_enriched_messages and _is_broadcast_enriched(llm_spans[0]):
-                logger.debug(f"Found {len(llm_spans)} LLM spans with broadcast-enriched messages, treating as single multi-turn conversation")
+                logger.debug(
+                    f"Found {len(llm_spans)} LLM spans with broadcast-enriched messages, treating as single multi-turn conversation"
+                )
                 return [llm_spans[0]]
 
         logger.debug("No clear invocation spans found, treating each root span as invocation")
@@ -171,9 +167,7 @@ def _extract_single_turn(inv_span: Span) -> _ConversationTurn:
         if is_llm_span(inv_span):
             llm_spans = [inv_span]
         else:
-            raise ValueError(
-                f"Invocation span {inv_span.span_id} has no LLM call spans"
-            )
+            raise ValueError(f"Invocation span {inv_span.span_id} has no LLM call spans")
 
     tool_spans = _find_tool_spans(inv_span)
     logger.debug(f"Found {len(tool_spans)} tool spans")
@@ -203,12 +197,14 @@ def _extract_multiturn_turns(llm_spans: list[Span]) -> list[_ConversationTurn]:
         logger.warning("Messages are not lists, falling back to single invocation")
         user_text = _extract_user_text(llm_spans[0])
         assistant_text = _extract_assistant_text(llm_spans[-1])
-        return [_ConversationTurn(
-            invocation_id=f"genai-{llm_spans[0].span_id}",
-            user_text=user_text,
-            assistant_text=assistant_text,
-            start_time=float(llm_spans[0].start_time),
-        )]
+        return [
+            _ConversationTurn(
+                invocation_id=f"genai-{llm_spans[0].span_id}",
+                user_text=user_text,
+                assistant_text=assistant_text,
+                start_time=float(llm_spans[0].start_time),
+            )
+        ]
 
     user_messages = [msg for msg in all_input_messages if msg.get("role") in USER_ROLES]
     assistant_messages = [msg for msg in all_output_messages if msg.get("role") in ASSISTANT_ROLES]
@@ -244,13 +240,15 @@ def _extract_multiturn_turns(llm_spans: list[Span]) -> list[_ConversationTurn]:
 
             assistant_idx += 1
 
-        turns.append(_ConversationTurn(
-            invocation_id=f"genai-turn-{user_idx + 1}-{llm_spans[0].span_id[:8]}",
-            user_text=user_text if isinstance(user_text, str) else "",
-            assistant_text=assistant_text,
-            tool_calls=tool_calls,
-            start_time=float(llm_spans[0].start_time),
-        ))
+        turns.append(
+            _ConversationTurn(
+                invocation_id=f"genai-turn-{user_idx + 1}-{llm_spans[0].span_id[:8]}",
+                user_text=user_text if isinstance(user_text, str) else "",
+                assistant_text=assistant_text,
+                tool_calls=tool_calls,
+                start_time=float(llm_spans[0].start_time),
+            )
+        )
 
     return turns
 
@@ -297,13 +295,9 @@ def _turn_to_invocation(turn: _ConversationTurn) -> Invocation:
         role="model",
         parts=[genai_types.Part(text=turn.assistant_text)],
     )
-    tool_uses = [
-        genai_types.FunctionCall(name=tc.name, args=tc.args, id=tc.id)
-        for tc in turn.tool_calls
-    ]
+    tool_uses = [genai_types.FunctionCall(name=tc.name, args=tc.args, id=tc.id) for tc in turn.tool_calls]
     tool_responses = [
-        genai_types.FunctionResponse(name=tr.name, response=tr.response, id=tr.id)
-        for tr in turn.tool_responses
+        genai_types.FunctionResponse(name=tr.name, response=tr.response, id=tr.id) for tr in turn.tool_responses
     ]
     return Invocation(
         invocation_id=turn.invocation_id,
@@ -331,9 +325,7 @@ def _extract_user_text(llm_span: Span) -> str:
                 return text
 
     logger.warning(f"No user message found in {len(messages)} messages")
-    raise ValueError(
-        f"LLM span {llm_span.span_id}: no user message found in gen_ai.input.messages"
-    )
+    raise ValueError(f"LLM span {llm_span.span_id}: no user message found in gen_ai.input.messages")
 
 
 def _extract_assistant_text(llm_span: Span) -> str:
@@ -346,7 +338,9 @@ def _extract_assistant_text(llm_span: Span) -> str:
     logger.debug(f"Extracting final response from {len(messages)} output messages")
     for i, msg in enumerate(messages):
         if isinstance(msg, dict):
-            logger.debug(f"  Message {i}: role={msg.get('role')}, content_len={len(msg.get('content', ''))}, has_tool_calls={bool(msg.get('tool_calls'))}")
+            logger.debug(
+                f"  Message {i}: role={msg.get('role')}, content_len={len(msg.get('content', ''))}, has_tool_calls={bool(msg.get('tool_calls'))}"
+            )
 
     for msg in reversed(messages):
         if not isinstance(msg, dict):
@@ -380,10 +374,7 @@ def _trim_cumulative_output(llm_span: Span, output_messages: list[dict]) -> list
     if not isinstance(input_messages, list):
         return output_messages
 
-    user_count = sum(
-        1 for m in input_messages
-        if isinstance(m, dict) and m.get("role") in USER_ROLES
-    )
+    user_count = sum(1 for m in input_messages if isinstance(m, dict) and m.get("role") in USER_ROLES)
     if user_count <= 1:
         return output_messages
 
@@ -397,10 +388,12 @@ def _trim_cumulative_output(llm_span: Span, output_messages: list[dict]) -> list
         if content:
             text_responses_seen += 1
             if text_responses_seen >= previous_turns:
-                trimmed = output_messages[i + 1:]
+                trimmed = output_messages[i + 1 :]
                 logger.debug(
                     "Trimmed cumulative output: %d → %d messages (skipped %d previous turns)",
-                    len(output_messages), len(trimmed), previous_turns,
+                    len(output_messages),
+                    len(trimmed),
+                    previous_turns,
                 )
                 return trimmed
 
@@ -443,11 +436,13 @@ def _extract_tool_calls(
         if result_raw:
             result_data = parse_tool_response_content(result_raw)
             logger.debug(f"Tool {tool_name} result: {str(result_data)[:100]}")
-            tool_responses.append(_ToolResponse(
-                name=tool_name,
-                response=result_data,
-                id=tool_call_id,
-            ))
+            tool_responses.append(
+                _ToolResponse(
+                    name=tool_name,
+                    response=result_data,
+                    id=tool_call_id,
+                )
+            )
         else:
             output_msgs_raw = tool_span.get_tag(OTEL_GENAI_OUTPUT_MESSAGES)
             if output_msgs_raw:
@@ -462,17 +457,21 @@ def _extract_tool_calls(
                             if part.get("type") == "tool_call_response" and "response" in part:
                                 resp = part["response"]
                                 if isinstance(resp, list):
-                                    texts = [t.get("text", "") for t in resp if isinstance(t, dict) and "text" in t]
+                                    texts = [
+                                        t.get("text", "") for t in resp if isinstance(t, dict) and "text" in t
+                                    ]
                                     result_data = parse_tool_response_content(" ".join(texts))
                                 elif isinstance(resp, dict):
                                     result_data = resp
                                 else:
                                     result_data = {"result": str(resp)}
-                                tool_responses.append(_ToolResponse(
-                                    name=tool_name,
-                                    response=result_data,
-                                    id=tool_call_id,
-                                ))
+                                tool_responses.append(
+                                    _ToolResponse(
+                                        name=tool_name,
+                                        response=result_data,
+                                        id=tool_call_id,
+                                    )
+                                )
                                 break
 
     if llm_spans:
@@ -527,10 +526,7 @@ def _is_broadcast_enriched(span: Span) -> bool:
     messages = parse_json_attr(messages_raw, "gen_ai.input.messages")
     if not isinstance(messages, list):
         return False
-    user_count = sum(
-        1 for m in messages
-        if isinstance(m, dict) and m.get("role") in USER_ROLES
-    )
+    user_count = sum(1 for m in messages if isinstance(m, dict) and m.get("role") in USER_ROLES)
     return user_count > 1
 
 
@@ -544,5 +540,3 @@ def _find_tool_spans(root: Span) -> list[Span]:
 
 def _has_llm_children(span: Span) -> bool:
     return _genai_extractor._has_llm_children(span)
-
-

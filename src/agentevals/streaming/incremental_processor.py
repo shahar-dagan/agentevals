@@ -13,7 +13,6 @@ session completion.
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from ..extraction import (
     extract_agent_response_from_attrs,
@@ -99,12 +98,14 @@ class IncrementalInvocationExtractor:
                     message_key = f"user:{user_text.strip()}"
                     if message_key not in self.seen_message_contents:
                         logger.debug(f"Extracted user input for invocation {invocation_id}")
-                        updates.append({
-                            "type": "user_input",
-                            "invocationId": invocation_id,
-                            "text": user_text,
-                            "timestamp": int(span.get("startTimeUnixNano", 0)) / 1e9,
-                        })
+                        updates.append(
+                            {
+                                "type": "user_input",
+                                "invocationId": invocation_id,
+                                "text": user_text,
+                                "timestamp": int(span.get("startTimeUnixNano", 0)) / 1e9,
+                            }
+                        )
                         self.seen_message_contents.add(message_key)
                 self.seen_user_input.add(invocation_id)
 
@@ -113,12 +114,14 @@ class IncrementalInvocationExtractor:
                 message_key = f"agent:{agent_text.strip()}"
                 if message_key not in self.seen_message_contents:
                     logger.debug(f"Extracted agent response for invocation {invocation_id}")
-                    updates.append({
-                        "type": "agent_response",
-                        "invocationId": invocation_id,
-                        "text": agent_text,
-                        "timestamp": int(span.get("endTimeUnixNano", 0)) / 1e9,
-                    })
+                    updates.append(
+                        {
+                            "type": "agent_response",
+                            "invocationId": invocation_id,
+                            "text": agent_text,
+                            "timestamp": int(span.get("endTimeUnixNano", 0)) / 1e9,
+                        }
+                    )
                     self.seen_message_contents.add(message_key)
                 self.seen_agent_response.add(invocation_id)
 
@@ -134,16 +137,17 @@ class IncrementalInvocationExtractor:
                 self.token_totals[invocation_id]["inputTokens"] += in_toks
                 self.token_totals[invocation_id]["outputTokens"] += out_toks
 
-                logger.debug("Token update for %s: +%d input, +%d output",
-                    invocation_id, in_toks, out_toks)
+                logger.debug("Token update for %s: +%d input, +%d output", invocation_id, in_toks, out_toks)
 
-                updates.append({
-                    "type": "token_update",
-                    "invocationId": invocation_id,
-                    "inputTokens": in_toks,
-                    "outputTokens": out_toks,
-                    "model": model,
-                })
+                updates.append(
+                    {
+                        "type": "token_update",
+                        "invocationId": invocation_id,
+                        "inputTokens": in_toks,
+                        "outputTokens": out_toks,
+                        "model": model,
+                    }
+                )
 
         elif operation_name.startswith("execute_tool") or is_genai_tool:
             span_id = span.get("spanId", "")
@@ -156,12 +160,14 @@ class IncrementalInvocationExtractor:
                 self.tool_names_by_id[call_id] = tool_call["name"]
 
                 if call_id not in self.seen_tool_calls[invocation_id]:
-                    updates.append({
-                        "type": "tool_call",
-                        "invocationId": invocation_id,
-                        "toolCall": tool_call,
-                        "timestamp": int(span.get("startTimeUnixNano", 0)) / 1e9,
-                    })
+                    updates.append(
+                        {
+                            "type": "tool_call",
+                            "invocationId": invocation_id,
+                            "toolCall": tool_call,
+                            "timestamp": int(span.get("startTimeUnixNano", 0)) / 1e9,
+                        }
+                    )
                     self.seen_tool_calls[invocation_id].add(call_id)
 
                     tool_result = extract_tool_result_from_attrs(attributes)
@@ -204,12 +210,14 @@ class IncrementalInvocationExtractor:
                 message_key = f"user:{user_text.strip() if isinstance(user_text, str) else user_text}"
                 if user_text and message_key not in self.seen_message_contents:
                     logger.debug(f"Extracted user input from log for invocation {invocation_id}")
-                    updates.append({
-                        "type": "user_input",
-                        "invocationId": invocation_id,
-                        "text": user_text,
-                        "timestamp": _normalize_ts(log_event.get("timestamp", 0)),
-                    })
+                    updates.append(
+                        {
+                            "type": "user_input",
+                            "invocationId": invocation_id,
+                            "text": user_text,
+                            "timestamp": _normalize_ts(log_event.get("timestamp", 0)),
+                        }
+                    )
                     self.seen_message_contents.add(message_key)
                     self.seen_user_input.add(invocation_id)
 
@@ -230,12 +238,14 @@ class IncrementalInvocationExtractor:
                 message_key = f"agent:{agent_text.strip() if isinstance(agent_text, str) else agent_text}"
                 if message_key not in self.seen_message_contents:
                     logger.debug(f"Extracted agent response from log for invocation {invocation_id}")
-                    updates.append({
-                        "type": "agent_response",
-                        "invocationId": invocation_id,
-                        "text": agent_text,
-                        "timestamp": _normalize_ts(log_event.get("timestamp", 0)),
-                    })
+                    updates.append(
+                        {
+                            "type": "agent_response",
+                            "invocationId": invocation_id,
+                            "text": agent_text,
+                            "timestamp": _normalize_ts(log_event.get("timestamp", 0)),
+                        }
+                    )
                     self.seen_message_contents.add(message_key)
                     self.seen_agent_response.add(invocation_id)
 
@@ -264,17 +274,21 @@ class IncrementalInvocationExtractor:
                                 }
 
                                 if "function" in tc and "arguments" in tc["function"]:
-                                    parsed = parse_json_attr(tc["function"]["arguments"], "tool_call.function.arguments")
+                                    parsed = parse_json_attr(
+                                        tc["function"]["arguments"], "tool_call.function.arguments"
+                                    )
                                     if isinstance(parsed, dict):
                                         tool_call["args"] = parsed
 
                                 logger.debug(f"Extracted tool call from log for invocation {invocation_id}")
-                                updates.append({
-                                    "type": "tool_call",
-                                    "invocationId": invocation_id,
-                                    "toolCall": tool_call,
-                                    "timestamp": _normalize_ts(log_event.get("timestamp", 0)),
-                                })
+                                updates.append(
+                                    {
+                                        "type": "tool_call",
+                                        "invocationId": invocation_id,
+                                        "toolCall": tool_call,
+                                        "timestamp": _normalize_ts(log_event.get("timestamp", 0)),
+                                    }
+                                )
                                 self.seen_message_contents.add(tool_key)
 
                                 if invocation_id not in self.seen_tool_calls:

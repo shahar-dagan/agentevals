@@ -15,11 +15,7 @@ from ..trace_attrs import (
 logger = logging.getLogger(__name__)
 
 
-def enrich_spans_with_logs(
-    spans: list[dict],
-    logs: list[dict],
-    session_id: str | None = None
-) -> list[dict]:
+def enrich_spans_with_logs(spans: list[dict], logs: list[dict], session_id: str | None = None) -> list[dict]:
     """Enrich spans with message content from GenAI logs.
 
     This reconstructs gen_ai.input.messages and gen_ai.output.messages attributes
@@ -104,20 +100,26 @@ def _inject_messages(
     span_copy["attributes"] = attrs
 
     if input_messages:
-        attrs.append({
-            "key": OTEL_GENAI_INPUT_MESSAGES,
-            "value": {"stringValue": json.dumps(input_messages)},
-        })
+        attrs.append(
+            {
+                "key": OTEL_GENAI_INPUT_MESSAGES,
+                "value": {"stringValue": json.dumps(input_messages)},
+            }
+        )
     if output_messages:
-        attrs.append({
-            "key": OTEL_GENAI_OUTPUT_MESSAGES,
-            "value": {"stringValue": json.dumps(output_messages)},
-        })
+        attrs.append(
+            {
+                "key": OTEL_GENAI_OUTPUT_MESSAGES,
+                "value": {"stringValue": json.dumps(output_messages)},
+            }
+        )
     if session_id:
-        attrs.append({
-            "key": OTEL_GENAI_AGENT_NAME,
-            "value": {"stringValue": session_id},
-        })
+        attrs.append(
+            {
+                "key": OTEL_GENAI_AGENT_NAME,
+                "value": {"stringValue": session_id},
+            }
+        )
 
     return span_copy
 
@@ -146,17 +148,20 @@ def _enrich_per_span(
             span_copy = span.copy()
             if session_id:
                 attrs = list(span_copy.get("attributes", []))
-                attrs.append({
-                    "key": OTEL_GENAI_AGENT_NAME,
-                    "value": {"stringValue": session_id},
-                })
+                attrs.append(
+                    {
+                        "key": OTEL_GENAI_AGENT_NAME,
+                        "value": {"stringValue": session_id},
+                    }
+                )
                 span_copy["attributes"] = attrs
             enriched.append(span_copy)
 
     matched = sum(1 for sid in logs_by_span if any(s.get("spanId") == sid for s in spans))
     logger.debug(
         "Per-span enrichment: %d log groups, %d matched to spans",
-        len(logs_by_span), matched,
+        len(logs_by_span),
+        matched,
     )
     return enriched
 
@@ -175,7 +180,8 @@ def _enrich_broadcast(
 
     logger.debug(
         "Broadcast enrichment: %d user, %d assistant messages",
-        len(input_messages), len(output_messages),
+        len(input_messages),
+        len(output_messages),
     )
 
     return [_inject_messages(span, input_messages, output_messages, session_id) for span in spans]

@@ -5,26 +5,25 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from ..config import EvalRunConfig
 from ..converter import convert_traces
 from ..loader.otlp import OtlpJsonLoader
 from ..runner import run_evaluation
-from ..config import EvalRunConfig
 from ..trace_attrs import OTEL_GENAI_INPUT_MESSAGES, OTEL_GENAI_REQUEST_MODEL
 from ..utils.log_enrichment import enrich_spans_with_logs
 from .models import (
-    StandardResponse,
-    SessionInfo,
     CreateEvalSetData,
     EvaluateSessionsData,
-    SessionEvalResult,
-    PrepareEvaluationData,
     GetTraceData,
+    PrepareEvaluationData,
+    SessionEvalResult,
+    SessionInfo,
+    StandardResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -92,7 +91,10 @@ async def create_eval_set_from_session(request: CreateEvalSetRequest):
         trace_file = await trace_manager._save_spans_to_temp_file(session)
         logger.debug(
             "Session %s: %d spans, %d logs saved to %s",
-            request.session_id, len(session.spans), len(session.logs), trace_file,
+            request.session_id,
+            len(session.spans),
+            len(session.logs),
+            trace_file,
         )
         loader = OtlpJsonLoader()
         traces = loader.load(str(trace_file))
@@ -140,13 +142,15 @@ async def create_eval_set_from_session(request: CreateEvalSetRequest):
                     "eval_id": "case_1",
                     "conversation": conversation,
                 }
-            ]
+            ],
         }
 
-        return StandardResponse(data=CreateEvalSetData(
-            eval_set=eval_set,
-            num_invocations=len(all_invocations),
-        ))
+        return StandardResponse(
+            data=CreateEvalSetData(
+                eval_set=eval_set,
+                num_invocations=len(all_invocations),
+            )
+        )
 
     except HTTPException:
         raise
@@ -171,17 +175,18 @@ async def evaluate_sessions(request: EvaluateSessionsRequest):
         )
 
         import tempfile
-        eval_set_file = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+
+        eval_set_file = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
         json.dump(eval_set_response.data.eval_set, eval_set_file)
         eval_set_file.close()
 
         sessions_to_evaluate = [
-            (session_id, session)
-            for session_id, session in trace_manager.sessions.items()
-            if session.is_complete
+            (session_id, session) for session_id, session in trace_manager.sessions.items() if session.is_complete
         ]
 
-        logger.info("Evaluating %d complete sessions (of %d total)", len(sessions_to_evaluate), len(trace_manager.sessions))
+        logger.info(
+            "Evaluating %d complete sessions (of %d total)", len(sessions_to_evaluate), len(trace_manager.sessions)
+        )
 
         sem = asyncio.Semaphore(5)
 
@@ -224,17 +229,17 @@ async def evaluate_sessions(request: EvaluateSessionsRequest):
                     logger.error(f"Failed to evaluate session {session_id}: {exc}", exc_info=True)
                     return SessionEvalResult(session_id=session_id, error=str(exc))
 
-        results = await asyncio.gather(
-            *[eval_one_session(sid, sess) for sid, sess in sessions_to_evaluate]
-        )
+        results = await asyncio.gather(*[eval_one_session(sid, sess) for sid, sess in sessions_to_evaluate])
 
         logger.info("Evaluation complete. Total results: %d", len(results))
 
-        return StandardResponse(data=EvaluateSessionsData(
-            golden_session_id=request.golden_session_id,
-            eval_set_id=request.eval_set_id,
-            results=results,
-        ))
+        return StandardResponse(
+            data=EvaluateSessionsData(
+                golden_session_id=request.golden_session_id,
+                eval_set_id=request.eval_set_id,
+                results=results,
+            )
+        )
 
     except HTTPException:
         raise
@@ -258,13 +263,13 @@ async def prepare_evaluation(request: PrepareEvaluationRequest):
             )
         )
 
-        import tempfile
         import os
+        import tempfile
 
         temp_dir = tempfile.gettempdir()
 
         eval_set_file = os.path.join(temp_dir, f"eval_set_{request.golden_session_id}.json")
-        with open(eval_set_file, 'w') as f:
+        with open(eval_set_file, "w") as f:
             json.dump(eval_set_response.data.eval_set, f)
 
         trace_files = []
@@ -274,19 +279,20 @@ async def prepare_evaluation(request: PrepareEvaluationRequest):
                 continue
 
             trace_file = await trace_manager._save_spans_to_temp_file(session)
-            trace_files.append({
-                "session_id": session_id,
-                "file_path": str(trace_file),
-            })
+            trace_files.append(
+                {
+                    "session_id": session_id,
+                    "file_path": str(trace_file),
+                }
+            )
 
-        return StandardResponse(data=PrepareEvaluationData(
-            eval_set_url=f"/api/streaming/download/{os.path.basename(eval_set_file)}",
-            trace_urls=[
-                f"/api/streaming/download/{os.path.basename(tf['file_path'])}"
-                for tf in trace_files
-            ],
-            num_traces=len(trace_files),
-        ))
+        return StandardResponse(
+            data=PrepareEvaluationData(
+                eval_set_url=f"/api/streaming/download/{os.path.basename(eval_set_file)}",
+                trace_urls=[f"/api/streaming/download/{os.path.basename(tf['file_path'])}" for tf in trace_files],
+                num_traces=len(trace_files),
+            )
+        )
 
     except HTTPException:
         raise
@@ -298,8 +304,8 @@ async def prepare_evaluation(request: PrepareEvaluationRequest):
 @streaming_router.get("/download/{filename}")
 async def download_file(filename: str):
     """Download a prepared trace or eval set file."""
-    import tempfile
     import os
+    import tempfile
 
     temp_dir = tempfile.gettempdir()
     file_path = os.path.join(temp_dir, filename)
@@ -313,8 +319,6 @@ async def download_file(filename: str):
     return FileResponse(file_path, media_type="application/json", filename=filename)
 
 
-
-
 @streaming_router.post("/get-trace", response_model=StandardResponse[GetTraceData])
 async def get_trace(request: GetTraceRequest):
     session = trace_manager.sessions.get(request.session_id)
@@ -324,7 +328,7 @@ async def get_trace(request: GetTraceRequest):
     try:
         import tempfile
 
-        temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False)
+        temp_file = tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False)
 
         unified_trace_id = session.trace_id
 
@@ -341,26 +345,28 @@ async def get_trace(request: GetTraceRequest):
             logger.warning(
                 "Session %s has GenAI spans but no logs. "
                 "Message content will be missing unless spans already enriched.",
-                request.session_id
+                request.session_id,
             )
 
         enriched_spans = enrich_spans_with_logs(session.spans, session.logs)
 
         for span in enriched_spans:
             span_copy = span.copy()
-            span_copy['traceId'] = unified_trace_id
+            span_copy["traceId"] = unified_trace_id
             temp_file.write(json.dumps(span_copy) + "\n")
 
         temp_file.close()
 
-        with open(temp_file.name, 'r') as f:
+        with open(temp_file.name) as f:
             trace_content = f.read()
 
-        return StandardResponse(data=GetTraceData(
-            session_id=request.session_id,
-            trace_content=trace_content,
-            num_spans=len(enriched_spans),
-        ))
+        return StandardResponse(
+            data=GetTraceData(
+                session_id=request.session_id,
+                trace_content=trace_content,
+                num_spans=len(enriched_spans),
+            )
+        )
 
     except Exception as exc:
         logger.exception("Failed to get trace")

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Any, Optional
+from typing import Any
 
 try:
     import websockets
@@ -33,8 +33,8 @@ class AgentEvalsStreamingProcessor:
         self.ws_url = ws_url
         self.session_id = session_id
         self.trace_id = trace_id
-        self.websocket: Optional[Any] = None
-        self.loop: Optional[asyncio.AbstractEventLoop] = None
+        self.websocket: Any | None = None
+        self.loop: asyncio.AbstractEventLoop | None = None
         self._connected = False
         self._span_buffer: list[dict] = []
         self._failed_spans: list[dict] = []
@@ -141,11 +141,7 @@ class AgentEvalsStreamingProcessor:
             self._span_buffer.clear()
             self._pending_sends.clear()
 
-            await self.websocket.send(
-                json.dumps(
-                    {"type": "session_end", "session_id": self.session_id}
-                )
-            )
+            await self.websocket.send(json.dumps({"type": "session_end", "session_id": self.session_id}))
 
             await self.websocket.close()
             self._connected = False
@@ -161,13 +157,9 @@ class AgentEvalsStreamingProcessor:
 
         attributes = []
         if scope_name:
-            attributes.append(
-                {"key": "otel.scope.name", "value": {"stringValue": scope_name}}
-            )
+            attributes.append({"key": "otel.scope.name", "value": {"stringValue": scope_name}})
         if scope_version:
-            attributes.append(
-                {"key": "otel.scope.version", "value": {"stringValue": scope_version}}
-            )
+            attributes.append({"key": "otel.scope.version", "value": {"stringValue": scope_version}})
 
         if span.attributes:
             for key, value in span.attributes.items():
@@ -203,6 +195,7 @@ class AgentEvalsStreamingProcessor:
             return
 
         from ..trace_attrs import OTEL_GENAI_INPUT_MESSAGES, OTEL_GENAI_OUTPUT_MESSAGES
+
         _genai_event_keys = {OTEL_GENAI_INPUT_MESSAGES, OTEL_GENAI_OUTPUT_MESSAGES}
         existing_keys = {a["key"] for a in attributes}
 
@@ -261,10 +254,7 @@ class AgentEvalsLogStreamingProcessor:
                 for key, value in log_record.attributes.items():
                     log_json["attributes"][key] = value
 
-            future = asyncio.run_coroutine_threadsafe(
-                self._send_log(log_json),
-                self.span_processor.loop
-            )
+            future = asyncio.run_coroutine_threadsafe(self._send_log(log_json), self.span_processor.loop)
 
             def handle_send_complete(fut):
                 try:

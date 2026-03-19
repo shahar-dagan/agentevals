@@ -30,11 +30,8 @@ async def enable_streaming(
         from opentelemetry.sdk.trace import TracerProvider
 
         from .processor import AgentEvalsStreamingProcessor
-    except ImportError as exc:
-        logger.error(
-            "opentelemetry-sdk required for streaming. Install with: "
-            "pip install opentelemetry-sdk websockets"
-        )
+    except ImportError:
+        logger.error("opentelemetry-sdk required for streaming. Install with: pip install opentelemetry-sdk websockets")
         raise
 
     session_id = session_name or f"session-{uuid.uuid4().hex[:8]}"
@@ -48,8 +45,7 @@ async def enable_streaming(
         tracer_provider.add_span_processor(processor)
     else:
         logger.warning(
-            "No TracerProvider found. Streaming may not work. "
-            "Ensure OpenTelemetry is configured in your agent."
+            "No TracerProvider found. Streaming may not work. Ensure OpenTelemetry is configured in your agent."
         )
 
     try:
@@ -84,6 +80,7 @@ def enable_streaming_sync(
         Prefer using the async version for better compatibility.
     """
     import warnings
+
     warnings.warn(
         "enable_streaming_sync is deprecated and will be removed in a future version. "
         "Use the async enable_streaming() context manager instead.",
@@ -96,10 +93,7 @@ def enable_streaming_sync(
 
         from .processor import AgentEvalsStreamingProcessor
     except ImportError:
-        logger.error(
-            "opentelemetry-sdk required for streaming. "
-            "Install with: pip install opentelemetry-sdk websockets"
-        )
+        logger.error("opentelemetry-sdk required for streaming. Install with: pip install opentelemetry-sdk websockets")
         return
 
     session_id = session_name or f"session-{uuid.uuid4().hex[:8]}"
@@ -115,7 +109,7 @@ def enable_streaming_sync(
     if isinstance(tracer_provider, TracerProvider):
         tracer_provider.add_span_processor(processor)
 
-    print(f"[agentevals] Connected to dev server")
+    print("[agentevals] Connected to dev server")
     print(f"[agentevals] Session: {session_id}")
     if eval_set_id:
         print(f"[agentevals] Eval set: {eval_set_id}")

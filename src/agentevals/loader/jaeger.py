@@ -43,13 +43,11 @@ class JaegerJsonLoader(TraceLoader):
         return "jaeger-json"
 
     def load(self, source: str) -> list[Trace]:
-        with open(source, "r") as f:
+        with open(source) as f:
             raw = json.load(f)
 
         if not isinstance(raw, dict) or "data" not in raw:
-            raise ValueError(
-                f"Invalid Jaeger JSON format: expected top-level 'data' key in {source}"
-            )
+            raise ValueError(f"Invalid Jaeger JSON format: expected top-level 'data' key in {source}")
 
         traces: list[Trace] = []
         for trace_data in raw["data"]:

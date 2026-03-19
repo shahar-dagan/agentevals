@@ -35,9 +35,7 @@ class Trace:
     all_spans: list[Span] = field(default_factory=list)
 
     def find_spans_by_operation(self, operation_prefix: str) -> list[Span]:
-        return [
-            s for s in self.all_spans if s.operation_name.startswith(operation_prefix)
-        ]
+        return [s for s in self.all_spans if s.operation_name.startswith(operation_prefix)]
 
     def find_spans_by_tag(self, key: str, value: Any) -> list[Span]:
         return [s for s in self.all_spans if s.get_tag(key) == value]

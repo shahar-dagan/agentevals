@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import tempfile
 from typing import Any
@@ -31,8 +30,7 @@ def create_server(server_url: str | None = None) -> FastMCP:
                 return _unwrap(r.json())
         except httpx.ConnectError:
             raise RuntimeError(
-                f"Cannot reach agentevals server at {_url}. "
-                "Start it with: uv run agentevals serve --dev"
+                f"Cannot reach agentevals server at {_url}. Start it with: uv run agentevals serve --dev"
             )
         except httpx.HTTPStatusError as e:
             raise RuntimeError(f"Server error {e.response.status_code}: {e.response.text}")
@@ -45,8 +43,7 @@ def create_server(server_url: str | None = None) -> FastMCP:
                 return _unwrap(r.json())
         except httpx.ConnectError:
             raise RuntimeError(
-                f"Cannot reach agentevals server at {_url}. "
-                "Start it with: uv run agentevals serve --dev"
+                f"Cannot reach agentevals server at {_url}. Start it with: uv run agentevals serve --dev"
             )
         except httpx.HTTPStatusError as e:
             raise RuntimeError(f"Server error {e.response.status_code}: {e.response.text}")
@@ -54,25 +51,24 @@ def create_server(server_url: str | None = None) -> FastMCP:
     def _summarize_run_result(result) -> dict[str, Any]:
         traces = []
         for tr in result.trace_results:
-            traces.append({
-                "trace_id": tr.trace_id,
-                "num_invocations": tr.num_invocations,
-                "metrics": [
-                    {
-                        "metric": mr.metric_name,
-                        "score": mr.score,
-                        "status": mr.eval_status,
-                        **({"error": mr.error} if mr.error else {}),
-                    }
-                    for mr in tr.metric_results
-                ],
-                **({"warnings": tr.conversion_warnings} if tr.conversion_warnings else {}),
-            })
+            traces.append(
+                {
+                    "trace_id": tr.trace_id,
+                    "num_invocations": tr.num_invocations,
+                    "metrics": [
+                        {
+                            "metric": mr.metric_name,
+                            "score": mr.score,
+                            "status": mr.eval_status,
+                            **({"error": mr.error} if mr.error else {}),
+                        }
+                        for mr in tr.metric_results
+                    ],
+                    **({"warnings": tr.conversion_warnings} if tr.conversion_warnings else {}),
+                }
+            )
         return {
-            "passed": all(
-                mr["status"] != "FAILED"
-                for tr in traces for mr in tr["metrics"]
-            ),
+            "passed": all(mr["status"] != "FAILED" for tr in traces for mr in tr["metrics"]),
             "traces": traces,
             **({"errors": result.errors} if result.errors else {}),
         }
@@ -162,8 +158,8 @@ def create_server(server_url: str | None = None) -> FastMCP:
         Args:
             session_id: Session ID from list_sessions.
         """
-        from agentevals.loader.otlp import OtlpJsonLoader
         from agentevals.converter import convert_traces
+        from agentevals.loader.otlp import OtlpJsonLoader
 
         raw = await _post("/api/streaming/get-trace", {"session_id": session_id})
 
@@ -181,14 +177,19 @@ def create_server(server_url: str | None = None) -> FastMCP:
                 tool_calls = []
                 if inv.intermediate_data:
                     tool_calls = [
-                        {"tool": tu.name, "args": getattr(tu, "args", {})}
-                        for tu in inv.intermediate_data.tool_uses
+                        {"tool": tu.name, "args": getattr(tu, "args", {})} for tu in inv.intermediate_data.tool_uses
                     ]
-                invocations.append({
-                    "user": next((p.text for p in inv.user_content.parts if p.text), "") if inv.user_content else "",
-                    "response": next((p.text for p in inv.final_response.parts if p.text), "") if inv.final_response else "",
-                    "tool_calls": tool_calls,
-                })
+                invocations.append(
+                    {
+                        "user": next((p.text for p in inv.user_content.parts if p.text), "")
+                        if inv.user_content
+                        else "",
+                        "response": next((p.text for p in inv.final_response.parts if p.text), "")
+                        if inv.final_response
+                        else "",
+                        "tool_calls": tool_calls,
+                    }
+                )
 
         return {
             "session_id": session_id,
@@ -218,11 +219,14 @@ def create_server(server_url: str | None = None) -> FastMCP:
             eval_set_id: A label for the eval set built from the golden session. You can use
                          any string or omit it — a default will be generated automatically.
         """
-        return await _post("/api/streaming/evaluate-sessions", {
-            "golden_session_id": golden_session_id,
-            "eval_set_id": eval_set_id or f"eval-{golden_session_id[:12]}",
-            "metrics": metrics,
-            "judge_model": judge_model,
-        })
+        return await _post(
+            "/api/streaming/evaluate-sessions",
+            {
+                "golden_session_id": golden_session_id,
+                "eval_set_id": eval_set_id or f"eval-{golden_session_id[:12]}",
+                "metrics": metrics,
+                "judge_model": judge_model,
+            },
+        )
 
     return mcp

@@ -4,15 +4,14 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
 
-from .base import Span, Trace, TraceLoader
 from ..trace_attrs import (
     OTEL_GENAI_INPUT_MESSAGES,
     OTEL_GENAI_OUTPUT_MESSAGES,
     OTEL_SCOPE,
     OTEL_SCOPE_VERSION,
 )
+from .base import Span, Trace, TraceLoader
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +32,7 @@ class OtlpJsonLoader(TraceLoader):
 
     def load(self, source: str) -> list[Trace]:
         """Load OTLP JSON file or JSONL (one span per line)."""
-        with open(source, "r") as f:
+        with open(source) as f:
             content = f.read().strip()
 
         if not content:
@@ -62,28 +61,21 @@ class OtlpJsonLoader(TraceLoader):
         all_spans = []
 
         for resource_span in data.get("resourceSpans", []):
-            resource_attrs = self._extract_attributes(
-                resource_span.get("resource", {}).get("attributes", [])
-            )
-
+            resource_attrs = se
             for scope_span in resource_span.get("scopeSpans", []):
                 scope = scope_span.get("scope", {})
                 scope_name = scope.get("name", "")
                 scope_version = scope.get("version", "")
 
                 for span_data in scope_span.get("spans", []):
-                    span = self._parse_span(
-                        span_data, resource_attrs, scope_name, scope_version
-                    )
+                    span = self._parse_span(span_data, resource_attrs, scope_name, scope_version)
                     all_spans.append(span)
 
         return self._build_traces(all_spans)
 
     def _parse_otlp_spans(self, spans_data: list[dict]) -> list[Trace]:
         """Parse flat list of OTLP spans (JSONL format for streaming)."""
-        all_spans = [
-            self._parse_span(span_data, {}, "", "") for span_data in spans_data
-        ]
+        all_spans = [self._parse_span(span_data, {}, "", "") for span_data in spans_data]
         return self._build_traces(all_spans)
 
     _GENAI_EVENT_KEYS = {OTEL_GENAI_INPUT_MESSAGES, OTEL_GENAI_OUTPUT_MESSAGES}

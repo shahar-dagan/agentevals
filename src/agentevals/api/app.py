@@ -11,13 +11,16 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
-from .routes import router
-from .debug_routes import debug_router, set_trace_manager as set_debug_trace_manager
-from ..utils.log_buffer import log_buffer
 from agentevals import __version__
+
+from ..utils.log_buffer import log_buffer
+from .debug_routes import debug_router
+from .debug_routes import set_trace_manager as set_debug_trace_manager
+from .routes import router
 
 try:
     from dotenv import load_dotenv
+
     env_path = Path(__file__).parent.parent.parent.parent / ".env"
     if env_path.exists():
         load_dotenv(env_path)
@@ -70,8 +73,9 @@ _trace_manager = None
 
 if _live_mode:
     from fastapi import WebSocket
-    from .streaming_routes import streaming_router, set_trace_manager
+
     from ..streaming.ws_server import StreamingTraceManager
+    from .streaming_routes import set_trace_manager, streaming_router
 
     app.include_router(streaming_router, prefix="/api/streaming")
     _trace_manager = StreamingTraceManager()
@@ -110,12 +114,13 @@ if _live_mode:
 def get_trace_manager():
     return _trace_manager
 
+
 _static_dir = Path(__file__).parent.parent / "_static"
 _has_ui = _static_dir.is_dir() and (_static_dir / "index.html").exists()
 
 if _has_ui and not os.getenv("AGENTEVALS_HEADLESS"):
-    from fastapi.staticfiles import StaticFiles
     from fastapi.responses import FileResponse
+    from fastapi.staticfiles import StaticFiles
 
     app.mount("/assets", StaticFiles(directory=_static_dir / "assets"), name="ui-assets")
 

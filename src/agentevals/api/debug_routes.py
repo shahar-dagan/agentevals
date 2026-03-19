@@ -10,16 +10,18 @@ import platform
 import sys
 import tempfile
 import zipfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, UploadFile, File as FastAPIFile, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile
+from fastapi import File as FastAPIFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from agentevals import __version__
+
 from ..utils.log_buffer import log_buffer
-from .models import StandardResponse, DebugLoadData, WSSessionStartedEvent, WSSessionCompleteEvent, SessionInfo
+from .models import DebugLoadData, SessionInfo, StandardResponse, WSSessionCompleteEvent, WSSessionStartedEvent
 
 if TYPE_CHECKING:
     from ..streaming.ws_server import StreamingTraceManager
@@ -53,27 +55,28 @@ def _get_package_version(name: str) -> str | None:
 
 def _collect_environment() -> dict:
     packages = [
-        "fastapi", "uvicorn", "google-adk", "google-genai",
-        "opentelemetry-sdk", "opentelemetry-api", "pydantic",
+        "fastapi",
+        "uvicorn",
+        "google-adk",
+        "google-genai",
+        "opentelemetry-sdk",
+        "opentelemetry-api",
+        "pydantic",
     ]
     return {
-        "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+        "timestamp": datetime.now(tz=UTC).isoformat(),
         "agentevals_version": __version__,
         "python_version": sys.version,
         "os": platform.system(),
         "os_version": platform.release(),
         "machine": platform.machine(),
-        "packages": {
-            p: _get_package_version(p) for p in packages
-        },
+        "packages": {p: _get_package_version(p) for p in packages},
         "config": {
             "log_level": os.getenv("AGENTEVALS_LOG_LEVEL", "INFO"),
             "live_mode": os.getenv("AGENTEVALS_LIVE") == "1",
         },
         "api_keys": {
-            "google": bool(
-                os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
-            ),
+            "google": bool(os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")),
             "anthropic": bool(os.getenv("ANTHROPIC_API_KEY")),
             "openai": bool(os.getenv("OPENAI_API_KEY")),
         },
@@ -126,7 +129,7 @@ def _collect_temp_files(session_ids: set[str] | None = None) -> dict[str, str]:
 
 @debug_router.post("/bundle")
 async def create_debug_bundle(diagnostics: FrontendDiagnostics):
-    timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d-%H%M%S")
+    timestamp = datetime.now(tz=UTC).strftime("%Y%m%d-%H%M%S")
     prefix = f"bug-report-{timestamp}"
 
     buf = io.BytesIO()
@@ -150,11 +153,7 @@ async def create_debug_bundle(diagnostics: FrontendDiagnostics):
                 f"{prefix}/sessions/{sid}/logs.json",
                 json.dumps(s["logs"], indent=2),
             )
-            session_meta = {
-                k: v
-                for k, v in s.items()
-                if k not in ("spans", "logs")
-            }
+            session_meta = {k: v for k, v in s.items() if k not in ("spans", "logs")}
             zf.writestr(
                 f"{prefix}/sessions/{sid}/session_meta.json",
                 json.dumps(session_meta, indent=2),
@@ -184,9 +183,7 @@ async def create_debug_bundle(diagnostics: FrontendDiagnostics):
     return StreamingResponse(
         buf,
         media_type="application/zip",
-        headers={
-            "Content-Disposition": f'attachment; filename="bug-report-{timestamp}.zip"'
-        },
+        headers={"Content-Disposition": f'attachment; filename="bug-report-{timestamp}.zip"'},
     )
 
 
@@ -241,25 +238,29 @@ async def load_debug_bundle(file: UploadFile = FastAPIFile(...)):
 
         _trace_manager.sessions[session.session_id] = session
 
-        await _trace_manager.broadcast_to_ui(WSSessionStartedEvent(
-            session=SessionInfo(
-                session_id=session.session_id,
-                trace_id=session.trace_id,
-                eval_set_id=session.eval_set_id,
-                span_count=len(session.spans),
-                is_complete=False,
-                started_at=session.started_at.isoformat(),
-                metadata=session.metadata,
-            ),
-        ).model_dump(by_alias=True))
+        await _trace_manager.broadcast_to_ui(
+            WSSessionStartedEvent(
+                session=SessionInfo(
+                    session_id=session.session_id,
+                    trace_id=session.trace_id,
+                    eval_set_id=session.eval_set_id,
+                    span_count=len(session.spans),
+                    is_complete=False,
+                    started_at=session.started_at.isoformat(),
+                    metadata=session.metadata,
+                ),
+            ).model_dump(by_alias=True)
+        )
 
         invocations_data = await _trace_manager._extract_invocations(session)
         await _trace_manager._save_spans_to_temp_file(session)
 
-        await _trace_manager.broadcast_to_ui(WSSessionCompleteEvent(
-            session_id=session.session_id,
-            invocations=invocations_data,
-        ).model_dump(by_alias=True))
+        await _trace_manager.broadcast_to_ui(
+            WSSessionCompleteEvent(
+                session_id=session.session_id,
+                invocations=invocations_data,
+            ).model_dump(by_alias=True)
+        )
 
         loaded.append(session.session_id)
         logger.info("Loaded session from bug report: %s", session.session_id)

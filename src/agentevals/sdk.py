@@ -48,10 +48,11 @@ import logging
 import os
 import threading
 import uuid
+from collections.abc import Callable
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from opentelemetry.sdk._logs import LoggerProvider
@@ -183,8 +184,7 @@ class AgentEvals:
             loop.call_soon_threadsafe(loop.stop)
             thread.join(timeout=5)
             raise ConnectionError(
-                f"[agentevals] Could not connect to {self.ws_url}. "
-                f"Is 'agentevals serve --dev' running?\n  {exc}"
+                f"[agentevals] Could not connect to {self.ws_url}. Is 'agentevals serve --dev' running?\n  {exc}"
             ) from exc
 
         setup.tracer_provider.add_span_processor(setup.processor)
@@ -240,8 +240,7 @@ class AgentEvals:
             await setup.processor.connect(eval_set_id=eff_eval_set_id, metadata=eff_metadata)
         except Exception as exc:
             raise ConnectionError(
-                f"[agentevals] Could not connect to {self.ws_url}. "
-                f"Is 'agentevals serve --dev' running?\n  {exc}"
+                f"[agentevals] Could not connect to {self.ws_url}. Is 'agentevals serve --dev' running?\n  {exc}"
             ) from exc
 
         setup.tracer_provider.add_span_processor(setup.processor)
@@ -393,6 +392,7 @@ class AgentEvals:
         """
         try:
             import opentelemetry.instrumentation.openai_v2  # noqa: F401
+
             return True
         except ImportError:
             return False
@@ -416,6 +416,7 @@ class AgentEvals:
 
         try:
             import strands  # noqa: F401
+
             os.environ.setdefault("OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental")
             found_instrumentor = True
         except ImportError:

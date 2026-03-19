@@ -8,36 +8,37 @@ import logging
 import os
 import shutil
 import tempfile
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic.alias_generators import to_camel
 
 from agentevals import __version__
+
+from ..builtin_metrics import METRICS_NEEDING_EXPECTED, METRICS_NEEDING_GCP, METRICS_NEEDING_LLM
 from ..config import (
-    EvalRunConfig,
     BuiltinMetricDef,
     CodeGraderDef,
     CustomGraderDef,
+    EvalRunConfig,
 )
 from ..extraction import get_extractor
-from ..runner import RunResult, load_eval_set, run_evaluation, get_loader
+from ..runner import RunResult, get_loader, load_eval_set, run_evaluation
 from ..trace_metrics import extract_performance_metrics, extract_trace_metadata
-from ..builtin_metrics import METRICS_NEEDING_EXPECTED, METRICS_NEEDING_LLM
 from .models import (
-    StandardResponse,
-    HealthData,
-    ConfigData,
     ApiKeyStatus,
-    MetricInfo,
+    ConfigData,
     EvalSetValidation,
-    SSEProgressEvent,
-    SSETraceProgressEvent,
-    SSETraceProgress,
-    SSEPerformanceMetricsEvent,
+    HealthData,
+    MetricInfo,
     SSEDoneEvent,
     SSEErrorEvent,
+    SSEPerformanceMetricsEvent,
+    SSEProgressEvent,
+    SSETraceProgress,
+    SSETraceProgressEvent,
+    StandardResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,7 @@ def _camel_keys(obj: Any) -> Any:
     if isinstance(obj, list):
         return [_camel_keys(item) for item in obj]
     return obj
+
 
 router = APIRouter()
 
@@ -78,22 +80,19 @@ async def health_check():
 
 @router.get("/config", response_model=StandardResponse[ConfigData])
 async def get_config():
-    return StandardResponse(data=ConfigData(
-        api_keys=ApiKeyStatus(
-            google=bool(os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")),
-            anthropic=bool(os.environ.get("ANTHROPIC_API_KEY")),
-            openai=bool(os.environ.get("OPENAI_API_KEY")),
+    return StandardResponse(
+        data=ConfigData(
+            api_keys=ApiKeyStatus(
+                google=bool(os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")),
+                anthropic=bool(os.environ.get("ANTHROPIC_API_KEY")),
+                openai=bool(os.environ.get("OPENAI_API_KEY")),
+            )
         )
-    ))
+    )
 
 
 @router.get("/metrics", response_model=StandardResponse[list[MetricInfo]])
 async def list_metrics():
-    _METRICS_NEEDING_GCP = {
-        "response_evaluation_score",
-        "safety_v1",
-    }
-
     _METRICS_NEEDING_RUBRICS = {
         "rubric_based_final_response_quality_v1",
         "rubric_based_tool_use_quality_v1",
@@ -108,6 +107,7 @@ async def list_metrics():
         "rubric_based_tool_use_quality_v1": "quality",
         "hallucinations_v1": "safety",
         "safety_v1": "safety",
+        "per_turn_user_simulator_quality_v1": "simulation",
     }
 
     try:
@@ -124,29 +124,103 @@ async def list_metrics():
             if m.metric_name == "per_turn_user_simulator_quality_v1":
                 continue
 
-            metrics.append(MetricInfo(
-                name=m.metric_name,
-                category=_METRIC_CATEGORIES.get(m.metric_name, "other"),
-                requires_eval_set=m.metric_name in METRICS_NEEDING_EXPECTED,
-                requires_llm=m.metric_name in METRICS_NEEDING_LLM,
-                requires_gcp=m.metric_name in _METRICS_NEEDING_GCP,
-                requires_rubrics=m.metric_name in _METRICS_NEEDING_RUBRICS,
-                description=m.description or "No description available",
-                working=m.metric_name not in _METRICS_NEEDING_RUBRICS,
-            ))
+            metrics.append(
+                MetricInfo(
+                    name=m.metric_name,
+                    category=_METRIC_CATEGORIES.get(m.metric_name, "other"),
+                    requires_eval_set=m.metric_name in METRICS_NEEDING_EXPECTED,
+                    requires_llm=m.metric_name in METRICS_NEEDING_LLM,
+                    requires_gcp=m.metric_name in METRICS_NEEDING_GCP,
+                    requires_rubrics=m.metric_name in _METRICS_NEEDING_RUBRICS,
+                    description=m.description or "No description available",
+                    working=m.metric_name not in _METRICS_NEEDING_RUBRICS,
+                )
+            )
 
         return StandardResponse(data=metrics)
 
     except ImportError:
         fallback = [
-            MetricInfo(name="tool_trajectory_avg_score", category="trajectory", requires_eval_set=True, requires_llm=False, requires_gcp=False, requires_rubrics=False, working=True, description="Compare tool call sequences against expected trajectory"),
-            MetricInfo(name="response_match_score", category="response", requires_eval_set=True, requires_llm=False, requires_gcp=False, requires_rubrics=False, working=True, description="Text similarity between actual and expected responses using ROUGE-1"),
-            MetricInfo(name="response_evaluation_score", category="response", requires_eval_set=True, requires_llm=False, requires_gcp=True, requires_rubrics=False, working=True, description="Semantic evaluation of response quality using Vertex AI"),
-            MetricInfo(name="final_response_match_v2", category="response", requires_eval_set=True, requires_llm=True, requires_gcp=False, requires_rubrics=False, working=True, description="LLM-based comparison of final responses"),
-            MetricInfo(name="hallucinations_v1", category="safety", requires_eval_set=False, requires_llm=True, requires_gcp=False, requires_rubrics=False, working=True, description="Detect hallucinated information in responses"),
-            MetricInfo(name="safety_v1", category="safety", requires_eval_set=False, requires_llm=False, requires_gcp=True, requires_rubrics=False, working=True, description="Safety and security assessment using Vertex AI"),
-            MetricInfo(name="rubric_based_final_response_quality_v1", category="quality", requires_eval_set=False, requires_llm=True, requires_gcp=False, requires_rubrics=True, working=False, description="Rubric-based quality assessment of responses (requires rubrics config)"),
-            MetricInfo(name="rubric_based_tool_use_quality_v1", category="quality", requires_eval_set=False, requires_llm=True, requires_gcp=False, requires_rubrics=True, working=False, description="Rubric-based assessment of tool usage quality (requires rubrics config)"),
+            MetricInfo(
+                name="tool_trajectory_avg_score",
+                category="trajectory",
+                requires_eval_set=True,
+                requires_llm=False,
+                requires_gcp=False,
+                requires_rubrics=False,
+                working=True,
+                description="Compare tool call sequences against expected trajectory",
+            ),
+            MetricInfo(
+                name="response_match_score",
+                category="response",
+                requires_eval_set=True,
+                requires_llm=False,
+                requires_gcp=False,
+                requires_rubrics=False,
+                working=True,
+                description="Text similarity between actual and expected responses using ROUGE-1",
+            ),
+            MetricInfo(
+                name="response_evaluation_score",
+                category="response",
+                requires_eval_set=True,
+                requires_llm=False,
+                requires_gcp=True,
+                requires_rubrics=False,
+                working=True,
+                description="Semantic evaluation of response quality using Vertex AI",
+            ),
+            MetricInfo(
+                name="final_response_match_v2",
+                category="response",
+                requires_eval_set=True,
+                requires_llm=True,
+                requires_gcp=False,
+                requires_rubrics=False,
+                working=True,
+                description="LLM-based comparison of final responses",
+            ),
+            MetricInfo(
+                name="hallucinations_v1",
+                category="safety",
+                requires_eval_set=False,
+                requires_llm=True,
+                requires_gcp=False,
+                requires_rubrics=False,
+                working=True,
+                description="Detect hallucinated information in responses",
+            ),
+            MetricInfo(
+                name="safety_v1",
+                category="safety",
+                requires_eval_set=False,
+                requires_llm=False,
+                requires_gcp=True,
+                requires_rubrics=False,
+                working=True,
+                description="Safety and security assessment using Vertex AI",
+            ),
+            MetricInfo(
+                name="rubric_based_final_response_quality_v1",
+                category="quality",
+                requires_eval_set=False,
+                requires_llm=True,
+                requires_gcp=False,
+                requires_rubrics=True,
+                working=False,
+                description="Rubric-based quality assessment of responses (requires rubrics config)",
+            ),
+            MetricInfo(
+                name="rubric_based_tool_use_quality_v1",
+                category="quality",
+                requires_eval_set=False,
+                requires_llm=True,
+                requires_gcp=False,
+                requires_rubrics=True,
+                working=False,
+                description="Rubric-based assessment of tool usage quality (requires rubrics config)",
+            ),
         ]
         return StandardResponse(data=fallback)
 
@@ -164,16 +238,20 @@ async def validate_eval_set(
 
         try:
             eval_set = load_eval_set(eval_set_path)
-            return StandardResponse(data=EvalSetValidation(
-                valid=True,
-                eval_set_id=eval_set.eval_set_id,
-                num_cases=len(eval_set.eval_cases),
-            ))
+            return StandardResponse(
+                data=EvalSetValidation(
+                    valid=True,
+                    eval_set_id=eval_set.eval_set_id,
+                    num_cases=len(eval_set.eval_cases),
+                )
+            )
         except Exception as exc:
-            return StandardResponse(data=EvalSetValidation(
-                valid=False,
-                errors=[str(exc)],
-            ))
+            return StandardResponse(
+                data=EvalSetValidation(
+                    valid=False,
+                    errors=[str(exc)],
+                )
+            )
 
     finally:
         shutil.rmtree(temp_dir)
@@ -183,7 +261,7 @@ async def validate_eval_set(
 async def evaluate_traces(
     trace_files: list[UploadFile] = File(...),
     config: str = Form(...),
-    eval_set_file: Optional[UploadFile] = File(None),
+    eval_set_file: UploadFile | None = File(None),
 ):
     """
     Evaluate agent traces using specified metrics.
@@ -246,7 +324,7 @@ async def evaluate_traces(
             if not eval_set_file.filename.endswith(".json"):
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Invalid file extension for eval set. Only .json files are allowed.",
+                    detail="Invalid file extension for eval set. Only .json files are allowed.",
                 )
 
             eval_set_path = os.path.join(temp_dir, eval_set_file.filename)
@@ -301,7 +379,7 @@ async def evaluate_traces(
         raise
     except Exception as exc:
         logger.exception("Evaluation failed")
-        raise HTTPException(status_code=500, detail=f"Internal error: {str(exc)}")
+        raise HTTPException(status_code=500, detail=f"Internal error: {exc!s}")
 
     finally:
         shutil.rmtree(temp_dir)
@@ -311,7 +389,7 @@ async def evaluate_traces(
 async def evaluate_traces_stream(
     trace_files: list[UploadFile] = File(...),
     config: str = Form(...),
-    eval_set_file: Optional[UploadFile] = File(None),
+    eval_set_file: UploadFile | None = File(None),
 ):
     """Evaluate traces with real-time progress via SSE."""
     temp_dir = tempfile.mkdtemp()

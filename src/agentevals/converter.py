@@ -62,6 +62,7 @@ def convert_trace(trace: Trace, format: str | None = None) -> ConversionResult:
 
     if trace_format == "genai":
         from .genai_converter import convert_genai_trace
+
         return convert_genai_trace(trace)
     else:
         return _convert_adk_trace(trace)
@@ -85,10 +86,7 @@ def _convert_adk_trace(trace: Trace) -> ConversionResult:
             invocation = _convert_invoke_span(invoke_span)
             result.invocations.append(invocation)
         except Exception as exc:
-            msg = (
-                f"Trace {trace.trace_id}: failed to convert invoke_agent "
-                f"span {invoke_span.span_id}: {exc}"
-            )
+            msg = f"Trace {trace.trace_id}: failed to convert invoke_agent span {invoke_span.span_id}: {exc}"
             logger.warning(msg)
             result.warnings.append(msg)
 
@@ -117,9 +115,7 @@ def _convert_invoke_span(invoke_span: Span) -> Invocation:
 
     call_llm_spans = _find_children_by_op(invoke_span, "call_llm")
     if not call_llm_spans:
-        raise ValueError(
-            f"invoke_agent span {invoke_span.span_id} has no child call_llm spans"
-        )
+        raise ValueError(f"invoke_agent span {invoke_span.span_id} has no child call_llm spans")
 
     tool_spans = _find_children_by_op(invoke_span, "execute_tool")
 
@@ -179,9 +175,7 @@ def _extract_user_content(first_call_llm: Span) -> genai_types.Content:
         if content_dict.get("role") == "user":
             return _content_from_dict(content_dict)
 
-    raise ValueError(
-        f"call_llm span {first_call_llm.span_id}: no user content found in llm_request"
-    )
+    raise ValueError(f"call_llm span {first_call_llm.span_id}: no user content found in llm_request")
 
 
 def _extract_final_response(last_call_llm: Span) -> genai_types.Content:
@@ -191,9 +185,7 @@ def _extract_final_response(last_call_llm: Span) -> genai_types.Content:
 
     content_dict = llm_response.get("content", {})
     if not content_dict:
-        raise ValueError(
-            f"call_llm span {last_call_llm.span_id}: no content in llm_response"
-        )
+        raise ValueError(f"call_llm span {last_call_llm.span_id}: no content in llm_response")
 
     parts_dicts = content_dict.get("parts", [])
     # Final response should have text parts, not function_call parts
@@ -207,8 +199,7 @@ def _extract_final_response(last_call_llm: Span) -> genai_types.Content:
     # If the last call_llm only has function_call parts, that's unexpected
     # for a final response — the agent may have been cut short.
     logger.warning(
-        "call_llm span %s: last llm_response has no text parts, "
-        "may not be the actual final response",
+        "call_llm span %s: last llm_response has no text parts, may not be the actual final response",
         last_call_llm.span_id,
     )
     return _content_from_dict(content_dict)
@@ -254,9 +245,7 @@ def _extract_from_tool_span(
         if op.startswith("execute_tool "):
             tool_name = op[len("execute_tool ") :]
         else:
-            logger.warning(
-                "execute_tool span %s: no tool name found", tool_span.span_id
-            )
+            logger.warning("execute_tool span %s: no tool name found", tool_span.span_id)
             return None, None
 
     args_raw = tool_span.get_tag(ADK_TOOL_CALL_ARGS, "{}")
@@ -339,5 +328,3 @@ def _content_from_dict(content_dict: dict[str, Any]) -> genai_types.Content:
             )
 
     return genai_types.Content(role=role, parts=parts)
-
-

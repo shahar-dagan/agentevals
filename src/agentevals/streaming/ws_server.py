@@ -12,20 +12,20 @@ from typing import Any
 
 from fastapi import WebSocket, WebSocketDisconnect
 
-from .session import TraceSession
-from .incremental_processor import IncrementalInvocationExtractor
+from ..api.models import (
+    SessionInfo,
+    WSSessionCompleteEvent,
+    WSSessionStartedEvent,
+    WSSpanReceivedEvent,
+)
 from ..converter import convert_traces
 from ..extraction import extract_token_usage_from_attrs, is_llm_span, parse_tool_response_content
 from ..loader.base import Trace
 from ..loader.otlp import OtlpJsonLoader
 from ..trace_attrs import OTEL_GENAI_INPUT_MESSAGES, OTEL_GENAI_REQUEST_MODEL
 from ..utils.log_enrichment import enrich_spans_with_logs
-from ..api.models import (
-    WSSessionStartedEvent,
-    WSSessionCompleteEvent,
-    WSSpanReceivedEvent,
-    SessionInfo,
-)
+from .incremental_processor import IncrementalInvocationExtractor
+from .session import TraceSession
 
 logger = logging.getLogger(__name__)
 
@@ -126,7 +126,7 @@ class StreamingTraceManager:
         if len(self.sessions) - len(to_remove) > self.max_sessions:
             sorted_sessions = sorted(
                 [(sid, s) for sid, s in self.sessions.items() if s.is_complete and sid not in to_remove],
-                key=lambda x: x[1].started_at
+                key=lambda x: x[1].started_at,
             )
             excess_count = len(self.sessions) - len(to_remove) - self.max_sessions
             for i in range(min(excess_count, len(sorted_sessions))):
@@ -144,9 +144,7 @@ class StreamingTraceManager:
             logger.debug("Removed old session: %s", session_id)
 
         cutoff = now - self._orphan_log_max_age
-        self._orphan_logs = [
-            e for e in self._orphan_logs if e["buffered_at"] >= cutoff
-        ]
+        self._orphan_logs = [e for e in self._orphan_logs if e["buffered_at"] >= cutoff]
 
         return len(to_remove)
 
@@ -158,9 +156,7 @@ class StreamingTraceManager:
             except Exception as exc:
                 logger.warning("Failed to broadcast to SSE client: %s", exc)
 
-    def buffer_orphan_log(
-        self, trace_id: str, session_name: str | None, log_event: dict
-    ) -> None:
+    def buffer_orphan_log(self, trace_id: str, session_name: str | None, log_event: dict) -> None:
         """Buffer a log event that arrived before its session was created.
 
         OTLP BatchLogRecordProcessor and BatchSpanProcessor flush independently.
@@ -168,12 +164,14 @@ class StreamingTraceManager:
         at which point no session exists yet. These orphan logs are buffered and
         replayed when the matching session is created.
         """
-        self._orphan_logs.append({
-            "trace_id": trace_id,
-            "session_name": session_name,
-            "log_event": log_event,
-            "buffered_at": datetime.now(UTC),
-        })
+        self._orphan_logs.append(
+            {
+                "trace_id": trace_id,
+                "session_name": session_name,
+                "log_event": log_event,
+                "buffered_at": datetime.now(UTC),
+            }
+        )
 
     def _replay_orphan_logs(self, session: TraceSession) -> list[dict]:
         """Replay buffered orphan logs that match the given session.
@@ -189,12 +187,8 @@ class StreamingTraceManager:
             if entry["buffered_at"] < cutoff:
                 continue
 
-            matched = (
-                entry["trace_id"] in session.trace_ids
-                or (
-                    entry["session_name"]
-                    and self._active_session_for_name.get(entry["session_name"]) == session.session_id
-                )
+            matched = entry["trace_id"] in session.trace_ids or (
+                entry["session_name"] and self._active_session_for_name.get(entry["session_name"]) == session.session_id
             )
 
             if matched:
@@ -209,14 +203,13 @@ class StreamingTraceManager:
         if replayed:
             logger.info(
                 "Replayed %d orphan logs into session %s",
-                len(replayed), session.session_id,
+                len(replayed),
+                session.session_id,
             )
 
         return replayed
 
-    async def get_or_create_otlp_session(
-        self, trace_id: str, metadata: dict
-    ) -> TraceSession:
+    async def get_or_create_otlp_session(self, trace_id: str, metadata: dict) -> TraceSession:
         """Get existing session for trace_id or create a new one (OTLP path).
 
         Groups spans by session_name (from resource attributes), not by trace_id.
@@ -249,10 +242,7 @@ class StreamingTraceManager:
             session_id=session_id,
             trace_id=trace_id,
             eval_set_id=metadata.get("eval_set_id"),
-            metadata={
-                k: v for k, v in metadata.get("resource_attrs", {}).items()
-                if not k.startswith("agentevals.")
-            },
+            metadata={k: v for k, v in metadata.get("resource_attrs", {}).items() if not k.startswith("agentevals.")},
             source="otlp",
             trace_ids={trace_id},
         )
@@ -260,18 +250,6 @@ class StreamingTraceManager:
         self.sessions[session_id] = session
         self._active_session_for_name[session_name] = session_id
         self.incremental_extractors[session_id] = IncrementalInvocationExtractor()
-
-        await self.broadcast_to_ui(WSSessionStartedEvent(
-            session=SessionInfo(
-                session_id=session_id,
-                trace_id=trace_id,
-                eval_set_id=metadata.get("eval_set_id"),
-                span_count=0,
-                is_complete=False,
-                started_at=session.started_at.isoformat(),
-                metadata=session.metadata,
-            ),
-        ).model_dump(by_alias=True))
 
         replayed = self._replay_orphan_logs(session)
         extractor = self.incremental_extractors.get(session_id)
@@ -281,6 +259,20 @@ class StreamingTraceManager:
                 for update in updates:
                     update["sessionId"] = session_id
                     await self.broadcast_to_ui(update)
+
+        await self.broadcast_to_ui(
+            WSSessionStartedEvent(
+                session=SessionInfo(
+                    session_id=session_id,
+                    trace_id=trace_id,
+                    eval_set_id=metadata.get("eval_set_id"),
+                    span_count=0,
+                    is_complete=False,
+                    started_at=session.started_at.isoformat(),
+                    metadata=session.metadata,
+                ),
+            ).model_dump(by_alias=True)
+        )
 
         logger.info("Auto-created OTLP session: %s (trace: %s)", session_id, trace_id)
         return session
@@ -328,9 +320,7 @@ class StreamingTraceManager:
             self._delayed_reextract(session_id, self.reextraction_delay_seconds)
         )
 
-    def _reopen_session(
-        self, session: TraceSession, trace_id: str, session_name: str
-    ) -> None:
+    def _reopen_session(self, session: TraceSession, trace_id: str, session_name: str) -> None:
         """Reopen a completed session when a trace_id already in the session
         receives more spans after completion (split-batch scenario).
 
@@ -348,7 +338,9 @@ class StreamingTraceManager:
         self.reset_idle_timer(session.session_id)
         logger.info(
             "Reopened session %s for trace %s (%d spans so far)",
-            session.session_id, trace_id, len(session.spans),
+            session.session_id,
+            trace_id,
+            len(session.spans),
         )
 
     async def _delayed_complete(self, session_id: str, delay: float) -> None:
@@ -382,16 +374,19 @@ class StreamingTraceManager:
 
         logger.info(
             "Re-extracting invocations with %d late logs for session %s",
-            len(session.logs), session_id,
+            len(session.logs),
+            session_id,
         )
 
         invocations_data = await self._extract_invocations(session)
         session.invocations = invocations_data
 
-        await self.broadcast_to_ui(WSSessionCompleteEvent(
-            session_id=session_id,
-            invocations=invocations_data,
-        ).model_dump(by_alias=True))
+        await self.broadcast_to_ui(
+            WSSessionCompleteEvent(
+                session_id=session_id,
+                invocations=invocations_data,
+            ).model_dump(by_alias=True)
+        )
 
     async def _complete_otlp_session(self, session_id: str) -> None:
         """Mark an OTLP session as complete and extract invocations.
@@ -418,16 +413,20 @@ class StreamingTraceManager:
 
         logger.info(
             "OTLP session complete: %s (%d spans, %d logs)",
-            session_id, len(session.spans), len(session.logs),
+            session_id,
+            len(session.spans),
+            len(session.logs),
         )
 
         invocations_data = await self._extract_invocations(session)
         session.invocations = invocations_data
 
-        await self.broadcast_to_ui(WSSessionCompleteEvent(
-            session_id=session_id,
-            invocations=invocations_data,
-        ).model_dump(by_alias=True))
+        await self.broadcast_to_ui(
+            WSSessionCompleteEvent(
+                session_id=session_id,
+                invocations=invocations_data,
+            ).model_dump(by_alias=True)
+        )
 
         if session_id in self.incremental_extractors:
             del self.incremental_extractors[session_id]
@@ -489,13 +488,14 @@ class StreamingTraceManager:
 
                     if not session.can_accept_span():
                         logger.warning(
-                            "Session %s has reached max span limit (%d), rejecting new span",
-                            sid, len(session.spans)
+                            "Session %s has reached max span limit (%d), rejecting new span", sid, len(session.spans)
                         )
-                        await websocket.send_json({
-                            "type": "error",
-                            "message": f"Session has reached maximum span limit ({len(session.spans)})"
-                        })
+                        await websocket.send_json(
+                            {
+                                "type": "error",
+                                "message": f"Session has reached maximum span limit ({len(session.spans)})",
+                            }
+                        )
                         continue
 
                     session.spans.append(event["span"])
@@ -507,10 +507,12 @@ class StreamingTraceManager:
                             update["sessionId"] = sid
                             await self.broadcast_to_ui(update)
 
-                    await self.broadcast_to_ui(WSSpanReceivedEvent(
-                        session_id=sid,
-                        span=event["span"],
-                    ).model_dump(by_alias=True))
+                    await self.broadcast_to_ui(
+                        WSSpanReceivedEvent(
+                            session_id=sid,
+                            span=event["span"],
+                        ).model_dump(by_alias=True)
+                    )
 
                 elif event["type"] == "log":
                     sid = event["session_id"]
@@ -524,13 +526,11 @@ class StreamingTraceManager:
 
                     if not session.can_accept_log():
                         logger.warning(
-                            "Session %s has reached max log limit (%d), rejecting new log",
-                            sid, len(session.logs)
+                            "Session %s has reached max log limit (%d), rejecting new log", sid, len(session.logs)
                         )
-                        await websocket.send_json({
-                            "type": "error",
-                            "message": f"Session has reached maximum log limit ({len(session.logs)})"
-                        })
+                        await websocket.send_json(
+                            {"type": "error", "message": f"Session has reached maximum log limit ({len(session.logs)})"}
+                        )
                         continue
 
                     session.logs.append(log_event)
@@ -569,9 +569,7 @@ class StreamingTraceManager:
                     if sid in self.incremental_extractors:
                         del self.incremental_extractors[sid]
 
-                    await websocket.send_json(
-                        {"type": "session_complete", "invocations": invocations_data}
-                    )
+                    await websocket.send_json({"type": "session_complete", "invocations": invocations_data})
 
         except WebSocketDisconnect:
             if session_id and session_id in self.sessions:
@@ -596,7 +594,7 @@ class StreamingTraceManager:
         with open(temp_file, "w") as f:
             for span in enriched_spans:
                 span_copy = span.copy()
-                span_copy['traceId'] = session.trace_id
+                span_copy["traceId"] = session.trace_id
                 f.write(json.dumps(span_copy) + "\n")
 
         return temp_file
@@ -619,7 +617,7 @@ class StreamingTraceManager:
                 - modelInfo: Model metadata (model name, tokens, etc.)
         """
         try:
-            temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False)
+            temp_file = tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False)
 
             has_genai_spans = any(
                 span.get("attributes", [])
@@ -634,14 +632,14 @@ class StreamingTraceManager:
                 logger.warning(
                     "Session %s has GenAI spans but no logs. "
                     "Message content will be missing unless spans already enriched.",
-                    session.session_id
+                    session.session_id,
                 )
 
             enriched_spans = enrich_spans_with_logs(session.spans, session.logs, session.session_id)
 
             for span in enriched_spans:
                 span_copy = span.copy()
-                span_copy['traceId'] = session.trace_id
+                span_copy["traceId"] = session.trace_id
                 temp_file.write(json.dumps(span_copy) + "\n")
             temp_file.close()
 
@@ -684,33 +682,39 @@ class StreamingTraceManager:
                     tool_calls = []
                     if inv.intermediate_data and inv.intermediate_data.tool_uses:
                         for tool_use in inv.intermediate_data.tool_uses:
-                            tool_calls.append({
-                                "name": tool_use.name,
-                                "args": tool_use.args if hasattr(tool_use, 'args') else {},
-                                "id": getattr(tool_use, 'id', None),
-                            })
+                            tool_calls.append(
+                                {
+                                    "name": tool_use.name,
+                                    "args": tool_use.args if hasattr(tool_use, "args") else {},
+                                    "id": getattr(tool_use, "id", None),
+                                }
+                            )
 
                     tool_responses = []
                     if inv.intermediate_data and inv.intermediate_data.tool_responses:
                         for tr in inv.intermediate_data.tool_responses:
-                            tool_responses.append({
-                                "name": tr.name,
-                                "response": tr.response if hasattr(tr, 'response') else {},
-                                "id": getattr(tr, 'id', None),
-                            })
+                            tool_responses.append(
+                                {
+                                    "name": tr.name,
+                                    "response": tr.response if hasattr(tr, "response") else {},
+                                    "id": getattr(tr, "id", None),
+                                }
+                            )
 
                     model_info = {}
                     if trace:
                         model_info = self._extract_model_info_from_trace(trace, inv_idx)
 
-                    invocations_data.append({
-                        "invocationId": inv.invocation_id,
-                        "userText": user_text,
-                        "agentText": agent_text,
-                        "toolCalls": tool_calls,
-                        "toolResponses": tool_responses,
-                        "modelInfo": model_info,
-                    })
+                    invocations_data.append(
+                        {
+                            "invocationId": inv.invocation_id,
+                            "userText": user_text,
+                            "agentText": agent_text,
+                            "toolCalls": tool_calls,
+                            "toolResponses": tool_responses,
+                            "modelInfo": model_info,
+                        }
+                    )
 
             logger.debug("Extracted %d invocations from %d traces", len(invocations_data), len(conversion_results))
 
@@ -718,7 +722,7 @@ class StreamingTraceManager:
 
             return invocations_data
 
-        except Exception as exc:
+        except Exception:
             logger.exception("Failed to extract invocations")
             return []
 
@@ -729,10 +733,7 @@ class StreamingTraceManager:
         total_input_tokens = 0
         total_output_tokens = 0
 
-        llm_spans = [
-            s for s in trace.all_spans
-            if is_llm_span(s) or "call_llm" in s.operation_name
-        ]
+        llm_spans = [s for s in trace.all_spans if is_llm_span(s) or "call_llm" in s.operation_name]
 
         for span in llm_spans:
             in_toks, out_toks, model = extract_token_usage_from_attrs(span.tags)

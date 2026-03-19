@@ -16,23 +16,22 @@ import logging
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Request, Response
+from google.protobuf.json_format import MessageToDict
+from opentelemetry.proto.collector.logs.v1.logs_service_pb2 import (
+    ExportLogsServiceRequest as LogsServiceRequestPB,
+)
+from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
+    ExportTraceServiceRequest as TraceServiceRequestPB,
+)
 
 from ..extraction import flatten_otlp_attributes
-from .models import WSSpanReceivedEvent
 from ..trace_attrs import (
     OTEL_GENAI_INPUT_MESSAGES,
     OTEL_GENAI_OUTPUT_MESSAGES,
     OTEL_SCOPE,
     OTEL_SCOPE_VERSION,
 )
-
-from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
-    ExportTraceServiceRequest as TraceServiceRequestPB,
-)
-from opentelemetry.proto.collector.logs.v1.logs_service_pb2 import (
-    ExportLogsServiceRequest as LogsServiceRequestPB,
-)
-from google.protobuf.json_format import MessageToDict
+from .models import WSSpanReceivedEvent
 
 if TYPE_CHECKING:
     from ..streaming.ws_server import StreamingTraceManager
@@ -113,9 +112,7 @@ async def _process_traces(body: dict) -> None:
                 if not trace_id:
                     continue
 
-                session = await _trace_manager.get_or_create_otlp_session(
-                    trace_id, metadata
-                )
+                session = await _trace_manager.get_or_create_otlp_session(trace_id, metadata)
 
                 if not session.can_accept_span():
                     logger.warning("Session %s at span limit", session.session_id)
@@ -123,27 +120,25 @@ async def _process_traces(body: dict) -> None:
 
                 session.spans.append(span)
 
-                extractor = _trace_manager.incremental_extractors.get(
-                    session.session_id
-                )
+                extractor = _trace_manager.incremental_extractors.get(session.session_id)
                 if extractor:
                     updates = extractor.process_span(span)
                     for update in updates:
                         update["sessionId"] = session.session_id
                         await _trace_manager.broadcast_to_ui(update)
 
-                await _trace_manager.broadcast_to_ui(WSSpanReceivedEvent(
-                    session_id=session.session_id,
-                    span=span,
-                ).model_dump(by_alias=True))
+                await _trace_manager.broadcast_to_ui(
+                    WSSpanReceivedEvent(
+                        session_id=session.session_id,
+                        span=span,
+                    ).model_dump(by_alias=True)
+                )
 
                 _trace_manager.reset_idle_timer(session.session_id)
 
                 if not span.get("parentSpanId"):
                     session.has_root_span = True
-                    _trace_manager.schedule_session_completion(
-                        session.session_id
-                    )
+                    _trace_manager.schedule_session_completion(session.session_id)
 
 
 async def _process_logs(body: dict) -> None:
@@ -186,12 +181,11 @@ async def _process_logs(body: dict) -> None:
 
                 if not session:
                     if _trace_manager:
-                        _trace_manager.buffer_orphan_log(
-                            trace_id, session_name, log_event
-                        )
+                        _trace_manager.buffer_orphan_log(trace_id, session_name, log_event)
                         logger.debug(
                             "Buffered orphan log trace_id=%s session_name=%s",
-                            trace_id[:12], session_name,
+                            trace_id[:12],
+                            session_name,
                         )
                     continue
 
@@ -205,9 +199,7 @@ async def _process_logs(body: dict) -> None:
                 else:
                     _trace_manager.reset_idle_timer(session.session_id)
 
-                    extractor = _trace_manager.incremental_extractors.get(
-                        session.session_id
-                    )
+                    extractor = _trace_manager.incremental_extractors.get(session.session_id)
                     if extractor:
                         updates = extractor.process_log(log_event)
                         for update in updates:
@@ -221,9 +213,7 @@ async def _process_logs(body: dict) -> None:
 _GENAI_EVENT_KEYS = {OTEL_GENAI_INPUT_MESSAGES, OTEL_GENAI_OUTPUT_MESSAGES}
 
 
-def _normalize_span(
-    span_data: dict, scope_name: str, scope_version: str
-) -> dict:
+def _normalize_span(span_data: dict, scope_name: str, scope_version: str) -> dict:
     """Normalize an OTLP span for the downstream pipeline.
 
     Performs two transformations:
@@ -243,9 +233,7 @@ def _normalize_span(
         attrs.append({"key": OTEL_SCOPE, "value": {"stringValue": scope_name}})
         existing_keys.add(OTEL_SCOPE)
     if scope_version and OTEL_SCOPE_VERSION not in existing_keys:
-        attrs.append(
-            {"key": OTEL_SCOPE_VERSION, "value": {"stringValue": scope_version}}
-        )
+        attrs.append({"key": OTEL_SCOPE_VERSION, "value": {"stringValue": scope_version}})
         existing_keys.add(OTEL_SCOPE_VERSION)
 
     for event in span.get("events", []):
@@ -289,10 +277,7 @@ def _convert_otlp_log_record(log_record: dict) -> dict | None:
     body_raw = log_record.get("body", {})
     body = _parse_otlp_body(body_raw)
 
-    timestamp = (
-        log_record.get("timeUnixNano")
-        or log_record.get("observedTimeUnixNano")
-    )
+    timestamp = log_record.get("timeUnixNano") or log_record.get("observedTimeUnixNano")
 
     result = {
         "event_name": event_name,
@@ -324,10 +309,7 @@ def _parse_otlp_any_value(value_obj: dict):
         return value_obj["boolValue"]
     if "kvlistValue" in value_obj:
         kv = value_obj["kvlistValue"]
-        return {
-            item.get("key", ""): _parse_otlp_any_value(item.get("value", {}))
-            for item in kv.get("values", [])
-        }
+        return {item.get("key", ""): _parse_otlp_any_value(item.get("value", {})) for item in kv.get("values", [])}
     if "arrayValue" in value_obj:
         arr = value_obj["arrayValue"]
         return [_parse_otlp_any_value(v) for v in arr.get("values", [])]

@@ -23,6 +23,7 @@ def _calc_percentiles(values: list[float]) -> dict[str, float]:
     if not values:
         return {"p50": 0.0, "p95": 0.0, "p99": 0.0}
     import statistics
+
     sorted_values = sorted(values)
     n = len(sorted_values)
     return {

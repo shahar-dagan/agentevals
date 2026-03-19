@@ -80,11 +80,13 @@ def extract_tool_calls_from_message(msg: dict) -> list[dict[str, Any]]:
             if tc.get("type") == "function" and "function" in tc:
                 func = tc["function"]
                 args = _parse_args(func.get("arguments", {}))
-                result.append({
-                    "name": func.get("name", ""),
-                    "id": tc.get("id"),
-                    "arguments": args,
-                })
+                result.append(
+                    {
+                        "name": func.get("name", ""),
+                        "id": tc.get("id"),
+                        "arguments": args,
+                    }
+                )
 
     if not result:
         parts = msg.get("parts")
@@ -93,17 +95,20 @@ def extract_tool_calls_from_message(msg: dict) -> list[dict[str, Any]]:
                 if not isinstance(part, dict) or part.get("type") != "tool_call":
                     continue
                 args = _parse_args(part.get("arguments", {}))
-                result.append({
-                    "name": part.get("name", ""),
-                    "id": part.get("id"),
-                    "arguments": args,
-                })
+                result.append(
+                    {
+                        "name": part.get("name", ""),
+                        "id": part.get("id"),
+                        "arguments": args,
+                    }
+                )
 
     return result
 
 
 def extract_tool_call_args_from_messages(
-    messages_raw: str | list | Any, tool_name: str,
+    messages_raw: str | list | Any,
+    tool_name: str,
 ) -> tuple[dict, str | None]:
     """Fallback: extract tool call args and ID from a messages attribute by matching *tool_name*.
 
