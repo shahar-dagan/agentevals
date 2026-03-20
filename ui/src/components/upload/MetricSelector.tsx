@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Checkbox, Button, Spin } from 'antd';
+import { Checkbox, Button } from 'antd';
 import { css } from '@emotion/react';
 import { AVAILABLE_METRICS, type MetricMetadata } from '../../lib/types';
 import { listMetrics } from '../../api/client';
@@ -125,29 +125,29 @@ const selectorStyle = css`
   }
 `;
 
+let cachedMetrics: MetricMetadata[] | null = null;
+
 export const MetricSelector: React.FC<MetricSelectorProps> = ({
   selectedMetrics,
   onToggleMetric,
   loadFromAPI = false,
 }) => {
-  const [metrics, setMetrics] = useState<MetricMetadata[]>(AVAILABLE_METRICS);
-  const [loading, setLoading] = useState(false);
+  const [metrics, setMetrics] = useState<MetricMetadata[]>(cachedMetrics ?? AVAILABLE_METRICS);
 
   useEffect(() => {
-    if (loadFromAPI) {
-      setLoading(true);
-      listMetrics()
-        .then((apiMetrics) => {
+    if (!loadFromAPI || cachedMetrics) return;
+    let cancelled = false;
+    listMetrics()
+      .then((apiMetrics) => {
+        if (!cancelled) {
+          cachedMetrics = apiMetrics;
           setMetrics(apiMetrics);
-        })
-        .catch((error) => {
-          console.error('Failed to load metrics from API, using fallback:', error);
-          setMetrics(AVAILABLE_METRICS);
-        })
-        .finally(() => {
-          setLoading(false);
-        });
-    }
+        }
+      })
+      .catch((error) => {
+        console.error('Failed to load metrics from API, using fallback:', error);
+      });
+    return () => { cancelled = true; };
   }, [loadFromAPI]);
 
   const categorizedMetrics = metrics.reduce(
@@ -174,14 +174,6 @@ export const MetricSelector: React.FC<MetricSelectorProps> = ({
       onToggleMetric(metric);
     });
   };
-
-  if (loading) {
-    return (
-      <div css={selectorStyle} style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '200px' }}>
-        <Spin tip="Loading metrics..." />
-      </div>
-    );
-  }
 
   return (
     <div css={selectorStyle}>
