@@ -10,6 +10,12 @@ Key integration points:
    events with gen_ai.input.messages / gen_ai.output.messages attributes, which the
    streaming processor promotes from span events to span attributes
 
+Note: Strands currently delivers message content via span events. The OTel community
+is deprecating span events in favor of log-based events (see
+https://opentelemetry.io/blog/2026/deprecating-span-events/). Future Strands versions
+will likely migrate to log-based events, at which point this example should switch to
+the logs-based pattern used in langchain_agent/.
+
 Prerequisites:
     1. Install dependencies:
        $ pip install -r requirements.txt

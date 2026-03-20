@@ -92,11 +92,13 @@ Detection checks for `gen_ai.request.model` / `gen_ai.input.messages` (GenAI sem
 | Example | Framework | LLM Provider | Instrumentation | Content Delivery |
 |---------|-----------|-------------|-----------------|-----------------|
 | [zero-code-examples/langchain/](./zero-code-examples/langchain/) | LangChain | OpenAI | GenAI semconv (logs) | Standard OTLP export |
-| [zero-code-examples/strands/](./zero-code-examples/strands/) | Strands | OpenAI | GenAI semconv (events) | Standard OTLP export |
+| [zero-code-examples/strands/](./zero-code-examples/strands/) | Strands | OpenAI | GenAI semconv (events*) | Standard OTLP export |
 | [zero-code-examples/adk/](./zero-code-examples/adk/) | Google ADK | Gemini | ADK built-in | Standard OTLP export |
 | [langchain_agent](./langchain_agent/) | LangChain | OpenAI | GenAI semconv (logs) | SDK WebSocket |
-| [strands_agent](./strands_agent/) | Strands | OpenAI | GenAI semconv (events) | SDK WebSocket |
+| [strands_agent](./strands_agent/) | Strands | OpenAI | GenAI semconv (events*) | SDK WebSocket |
 | [dice_agent](./dice_agent/) | Google ADK | Gemini | ADK built-in | SDK WebSocket |
+
+*\*Span events are [being deprecated](https://opentelemetry.io/blog/2026/deprecating-span-events/) in favor of log-based events. agentevals supports both. See [docs/otel-compatibility.md](../docs/otel-compatibility.md) for details.*
 
 The zero-code and SDK examples implement the same toy agent (dice rolling + prime checking) so you can compare the two approaches directly.
 
@@ -135,6 +137,9 @@ See [langchain_agent/README.md](./langchain_agent/README.md) for the full walkth
 
 ### Events-Based Content ([strands_agent](./strands_agent/))
 
+> [!NOTE]
+> The OTel community is [deprecating span events](https://opentelemetry.io/blog/2026/deprecating-span-events/) in favor of log-based events emitted via the Logs API. Frameworks currently using span events (like Strands) are expected to migrate to log-based events in future versions. agentevals supports both patterns and will continue to handle span events for backward compatibility.
+
 Used by frameworks that emit message content as **span events** rather than separate log records. The `AgentEvalsStreamingProcessor` automatically promotes `gen_ai.input.messages` and `gen_ai.output.messages` from event attributes to span attributes, so downstream processing sees a uniform shape.
 
 This pattern needs only a `TracerProvider`, no `LoggerProvider` or log processor:
@@ -149,10 +154,13 @@ telemetry.tracer_provider.add_span_processor(processor)
 
 ### Which Pattern Should I Use?
 
+- **For new instrumentation, prefer the logs-based pattern.** The OTel community recommends emitting events as log records rather than span events going forward.
 - **Check your framework/library docs first.** They will tell you whether message content is emitted as logs or span events.
 - If your instrumentation library requires a `LoggerProvider` (like `opentelemetry-instrumentation-openai-v2`), use the **logs-based** pattern.
-- If your framework emits GenAI span events (like Strands with `StrandsTelemetry`), use the **events-based** pattern, it's simpler.
+- If your framework currently emits GenAI span events (like Strands with `StrandsTelemetry`), the **events-based** pattern works today. When the framework migrates to log-based events, switch to the logs-based pattern.
 - If you're using **Google ADK**, skip GenAI semconv entirely. See the next section.
+
+For a detailed overview of OTel compatibility and the ongoing migration, see [docs/otel-compatibility.md](../docs/otel-compatibility.md).
 
 ## Framework-Native Tracing (Google ADK)
 

@@ -106,6 +106,22 @@ When a session ends (`session_end` message), the server:
 
 Evaluation is triggered separately from the UI or API.
 
+## GenAI Message Content: Span Events vs. Logs
+
+agentevals supports two mechanisms for receiving GenAI message content (`gen_ai.input.messages`, `gen_ai.output.messages`):
+
+**Log records (recommended).** Instrumentation libraries like `opentelemetry-instrumentation-openai-v2` emit message content as OTel log records correlated with spans via trace context. The server merges these back into spans during session completion (see `log_enrichment.py`).
+
+**Span events (legacy, supported for backward compatibility).** Some frameworks (notably Strands with `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`) currently emit message content as span event attributes. The `AgentEvalsStreamingProcessor` promotes these attributes to span-level attributes so downstream converters see a uniform shape. This promotion happens in three places:
+
+- `streaming/processor.py` for live WebSocket spans
+- `api/otlp_routes.py` for OTLP HTTP reception
+- `loader/otlp.py` for loading OTLP JSON files
+
+The OTel community is [deprecating span events](https://opentelemetry.io/blog/2026/deprecating-span-events/) in favor of log-based events emitted via the Logs API. As frameworks migrate, the log-based path will become the standard. The span event promotion logic will remain for backward compatibility with older instrumentation versions.
+
+For a full overview of supported OTel conventions and migration guidance, see [otel-compatibility.md](./otel-compatibility.md).
+
 ## WebSocket Protocol
 
 ### Endpoint: `/ws/traces`
