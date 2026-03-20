@@ -1,0 +1,106 @@
+name: Bug Report
+description: Report a bug or unexpected behavior in agentevals
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for taking the time to report a bug. Please fill out the sections below so we can reproduce and fix the issue.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What happened? Describe the bug clearly.
+      placeholder: When I run X, Y happens instead of Z...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps to reproduce the issue.
+      placeholder: |
+        1. Run `agentevals serve --dev`
+        2. Connect an agent via WebSocket
+        3. ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: usage-mode
+    attributes:
+      label: How are you using agentevals?
+      options:
+        - Live streaming (WebSocket / OTLP)
+        - CLI file evaluation (`agentevals run`)
+        - MCP server
+        - Other
+    validations:
+      required: true
+
+  - type: upload
+    id: config-dump
+    attributes:
+      label: Config dump (ZIP from the web UI)
+      description: |
+        If you are using the live web UI, click the **Bug Report** button in the sidebar (the bug icon at the bottom left).
+        This downloads a ZIP file containing your environment info, session data, and logs.
+        Drag and drop the ZIP file here.
+
+  - type: textarea
+    id: version-info
+    attributes:
+      label: Version information
+      description: |
+        If you are not using the web UI (or cannot generate the ZIP above), provide at minimum
+        the output of `agentevals --version` and `python --version`, along with your OS name and version along with the files mentioned below.
+      placeholder: |
+        agentevals version: ...
+        Python version: ...
+        OS: ...
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: eval-config
+    attributes:
+      label: Eval config (if applicable)
+      description: |
+        If you use an `eval_config.yaml`, paste its contents here.
+        Please redact any secrets or API keys.
+      render: yaml
+
+  - type: upload
+    id: trace-files
+    attributes:
+      label: Trace and eval set files
+      description: |
+        If you are using the CLI (`agentevals run`) or file upload method rather than live streaming,
+        please attach your trace file(s) and eval set file(s) so we can reproduce the issue.
+        Supported formats: Jaeger JSON, OTLP JSON/JSONL, ADK EvalSet JSON.
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or error output
+      description: |
+        Paste any error messages, stack traces, or log output.
+        Run with `-vv` for verbose output (e.g. `agentevals -vv run ...` or `agentevals serve --dev -vv`).
+      render: text
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Anything else that might help (screenshots, related issues, workarounds you tried, etc.).
