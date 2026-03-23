@@ -1,5 +1,5 @@
 VERSION := $(shell grep '^version' pyproject.toml | cut -d'"' -f2)
-WHEEL := dist/agentevals-$(VERSION)-py3-none-any.whl
+WHEEL := dist/agentevals_cli-$(VERSION)-py3-none-any.whl
 
 .PHONY: build build-bundle build-ui release clean dev-backend dev-frontend dev-bundle test test-unit test-integration test-e2e
 
