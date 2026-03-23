@@ -25,16 +25,20 @@ jobs:
 
       - name: 'Release Python Packages'
         working-directory: packages/evaluator-sdk-py
+        env:
+          TAG_OR_VERSION: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
-          # if workflow_dispatch is used, use the version input
-          if [ -n "${{ github.event.inputs.version }}" ]; then
-            export VERSION=${{ github.event.inputs.version }}
-          else
-            export VERSION=$(echo "$GITHUB_REF" | cut -c12-)
+          REF="${TAG_OR_VERSION}"
+          case "$REF" in
+            evaluator-sdk-v*) VERSION="${REF#evaluator-sdk-v}" ;;
+            *) VERSION="$REF" ;;
+          esac
+          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+'; then
+            echo "Expected PEP 440 version (e.g. 0.1.0) or tag evaluator-sdk-v0.1.0; got: $REF"
+            exit 1
           fi
           uv sync --all-extras
-          # Bump every package version to $VERSION first
-          uv version $VERSION --package agentevals-evaluator-sdk
+          uv version "$VERSION" --package agentevals-evaluator-sdk
 
           uv build --package agentevals-evaluator-sdk
           uv publish --token ${{ secrets.PYPI_TOKEN }}
