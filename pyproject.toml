@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "agentevals"
+name = "agentevals-cli"
 version = "0.5.1"
 description = "Standalone framework to evaluate agent correctness based on portable OpenTelemetry traces"
 requires-python = ">=3.11"
@@ -11,7 +11,6 @@ dependencies = [
     "google-adk[eval]>=1.25.0",
     "click>=8.0",
     "tabulate>=0.9.0",
-    "pandas>=2.2.3",
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
     "python-multipart>=0.0.12",

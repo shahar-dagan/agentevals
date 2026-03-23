@@ -15,7 +15,7 @@ resolution-markers = [
 
 [manifest]
 members = [
-    "agentevals",
+    "agentevals-cli",
     "agentevals-evaluator-sdk",
 ]
 
@@ -29,7 +29,7 @@ wheels = [
 ]
 
 [[package]]
-name = "agentevals"
+name = "agentevals-cli"
 version = "0.5.1"
 source = { editable = "." }
 dependencies = [
@@ -38,7 +38,6 @@ dependencies = [
     { name = "google-adk", extra = ["eval"] },
     { name = "httpx" },
     { name = "opentelemetry-proto" },
-    { name = "pandas" },
     { name = "python-dotenv" },
     { name = "python-multipart" },
     { name = "pyyaml" },
@@ -74,7 +73,6 @@ requires-dist = [
     { name = "mcp", marker = "extra == 'live'", specifier = ">=1.26.0" },
     { name = "opentelemetry-proto", specifier = ">=1.36.0" },
     { name = "opentelemetry-sdk", marker = "extra == 'streaming'", specifier = ">=1.20.0" },
-    { name = "pandas", specifier = ">=2.2.3" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "python-multipart", specifier = ">=0.0.12" },
     { name = "pyyaml", specifier = ">=6.0" },

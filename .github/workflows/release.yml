@@ -68,3 +68,22 @@ jobs:
           files: dist/**/*.whl
           generate_release_notes: true
 
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 'Checkout GitHub Action'
+        uses: actions/checkout@main
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      # Repo root cwd: uv build puts artifacts in ./dist; uv publish looks for dist/* relative to cwd.
+      - name: 'Release Python Packages'
+        env:
+          VERSION: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          uv sync --package agentevals-cli --all-extras
+          uv version "$VERSION" --package agentevals-cli
+
+          uv build --package agentevals-cli
+          uv publish dist/* --token ${{ secrets.PYPI_TOKEN }}
