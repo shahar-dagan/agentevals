@@ -216,8 +216,22 @@ class GitHubEvaluatorSource(EvaluatorSource):
             resp = await client.get(url, headers=self._headers(), timeout=30)
             resp.raise_for_status()
 
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(resp.text, encoding="utf-8")  # noqa: ASYNC240
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(resp.text, encoding="utf-8")  # noqa: ASYNC240
+
+            # Also try to fetch requirements.txt from the same directory.
+            ref_dir = str(Path(ref).parent)
+            req_ref = f"{ref_dir}/requirements.txt"
+            req_url = self._raw_url(req_ref)
+            try:
+                req_resp = await client.get(req_url, headers=self._headers(), timeout=15)
+                if req_resp.status_code == 200:
+                    req_dest = dest.parent / "requirements.txt"
+                    req_dest.write_text(req_resp.text, encoding="utf-8")  # noqa: ASYNC240
+                    logger.info("Downloaded requirements.txt for evaluator")
+            except httpx.HTTPError:
+                logger.debug("No requirements.txt found for evaluator (or download failed)")
+
         return dest
 
 
@@ -267,6 +281,12 @@ class FileEvaluatorSource(EvaluatorSource):
 
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dest)
+
+        # Also copy requirements.txt if it exists alongside the source file.
+        req_src = src.parent / "requirements.txt"
+        if req_src.exists():
+            shutil.copy2(req_src, dest.parent / "requirements.txt")
+
         return dest
 
 
