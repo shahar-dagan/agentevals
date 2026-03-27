@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import os
 import shutil
 import subprocess
 import sys
@@ -18,7 +19,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-_VENV_CACHE_DIR = Path.home() / ".cache" / "agentevals" / "venvs"
+_VENV_CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "agentevals" / "venvs"
 _HASH_FILE = ".requirements_hash"
 
 # Per-evaluator locks to prevent concurrent venv creation for the same evaluator.

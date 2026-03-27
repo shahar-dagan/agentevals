@@ -82,7 +82,7 @@ class Runtime(abc.ABC):
 
 class PythonRuntime(Runtime):
     def __init__(self, python_path: Path | None = None):
-        self._python_path = python_path
+        self._exe = str(python_path) if python_path else sys.executable
 
     @property
     def name(self) -> str:
@@ -93,14 +93,16 @@ class PythonRuntime(Runtime):
         return (".py",)
 
     def build_command(self, path: Path) -> list[str]:
-        exe = str(self._python_path) if self._python_path else sys.executable
-        return [exe, str(path)]
+        return [self._exe, str(path)]
 
     def is_available(self) -> bool:
         return True
 
 
 class NodeRuntime(Runtime):
+    def __init__(self) -> None:
+        self._exe = shutil.which("node")
+
     @property
     def name(self) -> str:
         return "Node.js"
@@ -110,10 +112,12 @@ class NodeRuntime(Runtime):
         return (".js", ".ts")
 
     def build_command(self, path: Path) -> list[str]:
-        node = shutil.which("node")
-        if not node:
+        if not self._exe:
             raise RuntimeError("Node.js not found on PATH (required for .js/.ts evaluators)")
-        return [node, str(path)]
+        return [self._exe, str(path)]
+
+    def is_available(self) -> bool:
+        return self._exe is not None
 
 
 _RUNTIMES: list[Runtime] = [
@@ -229,18 +233,16 @@ class SubprocessBackend(EvaluatorBackend):
 # ---------------------------------------------------------------------------
 
 _EXECUTOR_FACTORIES: dict[str, Callable[..., EvaluatorBackend]] = {
-    "local": lambda path, timeout, runtime=None: SubprocessBackend(path, timeout, runtime),
+    "local": lambda path, timeout: SubprocessBackend(path, timeout),
 }
 
 
-def create_executor(
-    executor_name: str, path: Path, timeout: int = 30, runtime: Runtime | None = None
-) -> EvaluatorBackend:
+def create_executor(executor_name: str, path: Path, timeout: int = 30) -> EvaluatorBackend:
     """Construct an EvaluatorBackend by executor name (e.g. 'local', 'docker')."""
     factory = _EXECUTOR_FACTORIES.get(executor_name)
     if factory is None:
         raise ValueError(f"Unknown executor '{executor_name}'. Available: {sorted(_EXECUTOR_FACTORIES.keys())}")
-    return factory(path, timeout, runtime)
+    return factory(path, timeout)
 
 
 def register_executor(name: str, factory: Callable[..., EvaluatorBackend]) -> None:
@@ -449,7 +451,10 @@ async def evaluate_custom_evaluator(
             if venv_python:
                 runtime = PythonRuntime(python_path=venv_python)
 
-        backend = create_executor(evaluator_def.executor, evaluator_path, evaluator_def.timeout, runtime=runtime)
+        if runtime is not None:
+            backend = SubprocessBackend(evaluator_path, evaluator_def.timeout, runtime=runtime)
+        else:
+            backend = create_executor(evaluator_def.executor, evaluator_path, evaluator_def.timeout)
     else:
         raise ValueError(f"Unsupported custom evaluator type: {type(evaluator_def).__name__}")
 
